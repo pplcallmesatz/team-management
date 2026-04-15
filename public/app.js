@@ -11,8 +11,20 @@ const api = async (url, options) => {
   return res.json();
 };
 
+
+
+
 const asDateInput = (v) => (v ? String(v).slice(0, 10) : '');
 const asMonthInput = (v) => (v ? String(v).slice(0, 7) : '');
+const formatDate = (v) => {
+  if (!v) return '';
+  return new Date(v).toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC'
+  });
+};
 const chip = (label, value, kind = 'secondary') => `<span class="badge text-bg-${kind} me-1 mb-1">${label}: ${Number(value).toFixed(2).replace(/\.00$/, '')}</span>`;
 
 const renderTable = (elId, rows, { allowHtml = false } = {}) => {
@@ -190,12 +202,24 @@ const renderDemandTable = () => {
   let rows = [...(state.data.scenario_project_demands || [])];
   if (selectedScenarioId) rows = rows.filter((r) => String(r.scenario_id) === String(selectedScenarioId));
   const transformed = rows.map((r) => ({
-    ...r,
+    // keep PK for Edit/Delete button lookup
+    demand_id: r.demand_id,
+    // desired visible order
     scenario_name: idMap.scenarioName(r.scenario_id),
     project_name: idMap.projectName(r.project_id),
-    resource_type: idMap.typeName(r.resource_type_id)
+    demand_from_date: formatDate(r.demand_from_date),
+    demand_to_date: formatDate(r.demand_to_date),
+    resource_type: idMap.typeName(r.resource_type_id),
+    required_count: r.required_count
+    // ...r,
+    // scenario_name: idMap.scenarioName(r.scenario_id),
+    // project_name: idMap.projectName(r.project_id),
+    // resource_type: idMap.typeName(r.resource_type_id)
   }));
-  renderCrudTable('demandsTable', transformed, 'scenario_project_demands', { hiddenCols: ['scenario_id', 'project_id', 'resource_type_id'] });
+  renderCrudTable('demandsTable', transformed, 'scenario_project_demands', {
+    hiddenCols: ['demand_id'] // hide PK column, keep actions working
+  });
+  // renderCrudTable('demandsTable', transformed, 'scenario_project_demands', { hiddenCols: ['scenario_id', 'project_id', 'resource_type_id'] });
 };
 
 const renderAllocationTable = () => {
@@ -205,9 +229,15 @@ const renderAllocationTable = () => {
   if (resourceFilter) rows = rows.filter((r) => String(r.resource_id) === String(resourceFilter));
   if (projectFilter) rows = rows.filter((r) => String(r.project_id) === String(projectFilter));
   const transformed = rows.map((r) => ({
-    ...r,
+    // ...r,
+    // resource_name: idMap.resourceName(r.resource_id),
+    // project_name: idMap.projectName(r.project_id)
+    // allocation_id: r.allocation_id, // keep PK for actions
+    project_name: idMap.projectName(r.project_id),
     resource_name: idMap.resourceName(r.resource_id),
-    project_name: idMap.projectName(r.project_id)
+    utilization_percentage: r.utilization_percentage,
+    from_date: formatDate(r.from_date),
+    to_date: formatDate(r.to_date)
   }));
   renderCrudTable('allocationsTable', transformed, 'allocations', { hiddenCols: ['resource_id', 'project_id'] });
 };
@@ -249,7 +279,19 @@ const refreshEntityData = async () => {
   state.data.resource_summary = await api('/api/resources/summary/list');
 
   renderCrudTable('resourceTypesTable', state.data.resource_types, 'resource_types');
-  renderCrudTable('projectsTable', state.data.projects, 'projects');
+  const projectRows = (state.data.projects || []).map((p) => ({
+    project_id: p.project_id, // keep PK for Edit/Delete
+    project_name: p.project_name,
+    client_name: p.client_name,
+    project_owner: p.project_owner,
+    start_date: formatDate(p.start_date),
+    end_date: formatDate(p.end_date),
+    status: p.status,
+    notes: p.notes
+  }));
+  renderCrudTable('projectsTable', projectRows, 'projects', { hiddenCols: ['project_id'] });
+
+  // renderCrudTable('projectsTable', state.data.projects, 'projects');
   renderAllocationTable();
   renderCrudTable('skillsTable', state.data.skills, 'skills');
   renderResourceSkillsTable();
@@ -356,6 +398,11 @@ const toChipCell = (designations, key, badgeType) => designations
   .map((d) => chip(d.type_name, d[key], badgeType))
   .join('') || '<span class="text-muted">0</span>';
 
+const toTotalPlusChipCell = (total, designations, key, badgeType) => `
+  <div>${Number(total).toFixed(2).replace(/\.00$/, '')}</div>
+  <div class="mt-1">${toChipCell(designations, key, badgeType)}</div>
+`;
+
 const loadTimeline = async () => {
   const scenarioId = document.getElementById('scenarioSelect').value;
   if (!scenarioId) return;
@@ -365,11 +412,11 @@ const loadTimeline = async () => {
 
   renderTable('timelineTable', state.timelineSummary.map((m) => ({
     month: m.month,
-    total_available: m.total_available,
+    total_available: toTotalPlusChipCell(m.total_available, m.designations, 'available_count', 'secondary'),
     total_demand: toChipCell(m.designations, 'demand_count', 'info'),
-    occupied_count: m.occupied_count,
-    bench_count: toChipCell(m.designations, 'bench_count', 'warning'),
-    shortage_count: toChipCell(m.designations, 'shortage_count', 'danger'),
+    occupied_count: toTotalPlusChipCell(m.occupied_count, m.designations, 'occupied_count', 'primary'),
+    bench_count: toTotalPlusChipCell(m.bench_count, m.designations, 'bench_count', 'warning'),
+    shortage_count: toTotalPlusChipCell(m.shortage_count, m.designations, 'shortage_count', 'danger'),
     salary_spend: m.salary_spend,
     revenue_potential: m.revenue_potential,
     profit_estimate: m.profit_estimate
