@@ -29,12 +29,50 @@ const monthRange = (startMonth, endMonth) => {
   return months;
 };
 
+const getYmdParts = (value) => {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return {
+      y: value.getFullYear(),
+      m: value.getMonth() + 1,
+      d: value.getDate()
+    };
+  }
+
+  const str = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const [y, m, d] = str.split('-').map(Number);
+    return { y, m, d };
+  }
+
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    return {
+      y: parsed.getFullYear(),
+      m: parsed.getMonth() + 1,
+      d: parsed.getDate()
+    };
+  }
+
+  return null;
+};
+
 const monthOverlapsRange = (month, fromDate, toDate) => {
   const mStart = new Date(`${month}-01T00:00:00Z`);
   const mEnd = new Date(Date.UTC(mStart.getUTCFullYear(), mStart.getUTCMonth() + 1, 0, 23, 59, 59));
-  const from = new Date(`${String(fromDate).slice(0, 10)}T00:00:00Z`);
-  const to = new Date(`${String(toDate).slice(0, 10)}T23:59:59Z`);
+  const fromParts = getYmdParts(fromDate);
+  const toParts = getYmdParts(toDate);
+  if (!fromParts || !toParts) return false;
+  const from = new Date(Date.UTC(fromParts.y, fromParts.m - 1, fromParts.d, 0, 0, 0));
+  const to = new Date(Date.UTC(toParts.y, toParts.m - 1, toParts.d, 23, 59, 59));
   return from <= mEnd && to >= mStart;
+};
+
+const monthKeyFromDate = (value) => {
+  const parts = getYmdParts(value);
+  if (!parts) return null;
+  return `${parts.y}-${String(parts.m).padStart(2, '0')}`;
 };
 const crudConfig = {
   resources: { table: 'resources', pk: 'resource_id' },
@@ -191,15 +229,14 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
 
     const months = monthRange(scenario.start_month, scenario.end_month);
 
-    const [resourceTypes] = await pool.query('SELECT resource_type_id, type_name, rate_card_min, rate_card_max FROM resource_types ORDER BY resource_type_id');
+    const [resourceTypes] = await pool.query('SELECT resource_type_id, type_name, rate_card_min, rate_card_max, salary_ctc_max FROM resource_types ORDER BY resource_type_id');
     const [activeResourceRows] = await pool.query(`
       SELECT resource_id, resource_type_id
       FROM resources
       WHERE status='Active'
     `);
-    const [salaryRows] = await pool.query("SELECT IFNULL(SUM(current_ctc/12),0) AS salary_monthly FROM resources WHERE status='Active'");
     const [allocationRows] = await pool.query(`
-      SELECT resource_id, from_date, to_date
+      SELECT resource_id, from_date, to_date, utilization_percentage
       FROM allocations
     `);
     const [demandRows] = await pool.query(`
@@ -226,14 +263,15 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
 
     const demandMap = {};
     for (const row of demandRows) {
-      const coveredMonths = monthRange(String(row.demand_from_date).slice(0, 7), String(row.demand_to_date).slice(0, 7));
+      const fromMonth = monthKeyFromDate(row.demand_from_date);
+      const toMonth = monthKeyFromDate(row.demand_to_date);
+      if (!fromMonth || !toMonth) continue;
+      const coveredMonths = monthRange(fromMonth, toMonth);
       coveredMonths.forEach((month) => {
         const key = `${month}|${row.resource_type_id}`;
         demandMap[key] = Number((demandMap[key] || 0) + (Number(row.required_count) * (Number(row.utilization_percentage) / 100)));
       });
     }
-
-    const salaryMonthly = Number(salaryRows[0]?.salary_monthly || 0);
 
     const summary = months.map((month) => {
       let totalAvailable = 0;
@@ -242,20 +280,26 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
       let totalBench = 0;
       let totalShortage = 0;
       let revenue = 0;
+      let salary = 0;
 
       const designations = resourceTypes.map((rt) => {
         const activeIds = activeByType[rt.resource_type_id] || [];
-        const occupiedByActualAlloc = activeIds.filter((resourceId) => {
+        const typeAllocatedFte = activeIds.reduce((sum, resourceId) => {
           const allocs = allocationsByResource[resourceId] || [];
-          return allocs.some((a) => monthOverlapsRange(month, a.from_date, a.to_date));
-        }).length;
-        const available = Math.max(activeIds.length - occupiedByActualAlloc, 0);
+          const utilForMonth = allocs
+            .filter((a) => monthOverlapsRange(month, a.from_date, a.to_date))
+            .reduce((u, a) => u + (Number(a.utilization_percentage || 0) / 100), 0);
+          return sum + Math.min(utilForMonth, 1);
+        }, 0);
+        const available = Math.max(activeIds.length - typeAllocatedFte, 0);
         const demand = Number((demandMap[`${month}|${rt.resource_type_id}`] || 0).toFixed(2));
-        const occupied = Math.min(available, demand);
+        const occupied = Number(typeAllocatedFte.toFixed(2));
         const bench = Math.max(available - demand, 0);
         const shortage = Math.max(demand - available, 0);
-        const minRate = Number(rt.rate_card_min);
-        const typeRevenuePotential = demand * minRate;
+        const minRate = Number(rt.rate_card_min || 0);
+        const maxSalary = Number(rt.salary_ctc_max || 0);
+        const typeRevenuePotential = (occupied + bench + shortage) * minRate;
+        const typeSalarySpend = ((occupied + bench + shortage) * maxSalary) / 12;
         const typeServiceableRevenue = occupied * minRate;
 
         totalAvailable += available;
@@ -264,15 +308,17 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
         totalBench += bench;
         totalShortage += shortage;
         revenue += typeRevenuePotential;
+        salary += typeSalarySpend;
 
         return {
           resource_type_id: rt.resource_type_id,
           type_name: rt.type_name,
-          available_count: Number(available.toFixed ? available.toFixed(2) : available),
+          available_count: Number(available.toFixed(2)),
           demand_count: Number(demand.toFixed(2)),
           occupied_count: Number(occupied.toFixed(2)),
           bench_count: Number(bench.toFixed(2)),
           shortage_count: Number(shortage.toFixed(2)),
+          salary_spend: Number(typeSalarySpend.toFixed(2)),
           revenue_potential: Number(typeRevenuePotential.toFixed(2)),
           serviceable_revenue: Number(typeServiceableRevenue.toFixed(2))
         };
@@ -285,9 +331,9 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
         occupied_count: Number(totalOccupied.toFixed(2)),
         bench_count: Number(totalBench.toFixed(2)),
         shortage_count: Number(totalShortage.toFixed(2)),
-        salary_spend: Number(salaryMonthly.toFixed(2)),
+        salary_spend: Number(salary.toFixed(2)),
         revenue_potential: Number(revenue.toFixed(2)),
-        profit_estimate: Number((revenue - salaryMonthly).toFixed(2)),
+        profit_estimate: Number((revenue - salary).toFixed(2)),
         designations
       };
     });
@@ -326,7 +372,10 @@ app.get('/api/projection/:scenarioId/project-wise', async (req, res) => {
           monthTotals: Object.fromEntries(scenarioMonths.map((m) => [m, 0]))
         };
       }
-      const coveredMonths = monthRange(String(row.demand_from_date).slice(0, 7), String(row.demand_to_date).slice(0, 7));
+      const fromMonth = monthKeyFromDate(row.demand_from_date);
+      const toMonth = monthKeyFromDate(row.demand_to_date);
+      if (!fromMonth || !toMonth) return;
+      const coveredMonths = monthRange(fromMonth, toMonth);
       coveredMonths.forEach((month) => {
         if (grouped[row.project_id].monthTotals[month] !== undefined) {
           grouped[row.project_id].monthTotals[month] += Number(row.required_count) * (Number(row.utilization_percentage) / 100);
@@ -358,6 +407,10 @@ app.get('/api/projection/:scenarioId/bench', async (req, res) => {
       WHERE r.status='Active'
       ORDER BY r.resource_type_id, r.name
     `);
+    const [allocationRows] = await pool.query(`
+      SELECT resource_id, from_date, to_date
+      FROM allocations
+    `);
 
     const [demandRows] = await pool.query(`
       SELECT resource_type_id,
@@ -377,10 +430,18 @@ app.get('/api/projection/:scenarioId/bench', async (req, res) => {
       }
     });
 
-        const grouped = {};
+    const busyResourceIds = new Set(
+      allocationRows
+        .filter((a) => monthOverlapsRange(month, a.from_date, a.to_date))
+        .map((a) => String(a.resource_id))
+    );
+
+    const grouped = {};
     resources.forEach((r) => {
       if (!grouped[r.resource_type_id]) grouped[r.resource_type_id] = [];
-      grouped[r.resource_type_id].push(r);
+      if (!busyResourceIds.has(String(r.resource_id))) {
+        grouped[r.resource_type_id].push(r);
+      }
     });
 
     const benchResources = [];
