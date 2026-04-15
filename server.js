@@ -221,14 +221,15 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
         const bench = Math.max(available - demand, 0);
         const shortage = Math.max(demand - available, 0);
         const avgRate = (Number(rt.rate_card_min) + Number(rt.rate_card_max)) / 2;
-        const typeRevenue = occupied * avgRate;
+        const typeRevenuePotential = demand * avgRate;
+        const typeServiceableRevenue = occupied * avgRate;
 
         totalAvailable += available;
         totalDemand += demand;
         totalOccupied += occupied;
         totalBench += bench;
         totalShortage += shortage;
-        revenue += typeRevenue;
+        revenue += typeRevenuePotential;
 
         return {
           resource_type_id: rt.resource_type_id,
@@ -238,7 +239,8 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
           occupied_count: Number(occupied.toFixed(2)),
           bench_count: Number(bench.toFixed(2)),
           shortage_count: Number(shortage.toFixed(2)),
-          revenue: Number(typeRevenue.toFixed(2))
+          revenue_potential: Number(typeRevenuePotential.toFixed(2)),
+          serviceable_revenue: Number(typeServiceableRevenue.toFixed(2))
         };
       });
 
