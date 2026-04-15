@@ -44,10 +44,10 @@ INSERT INTO resource_comments (resource_id, comment_text) VALUES
 INSERT INTO projection_scenarios (scenario_name, start_month, end_month, notes) VALUES
 ('FY 2026 Q2 Plan', '2026-04', '2026-06', 'Quarterly plan for 3 projects');
 
-INSERT INTO scenario_project_demands (scenario_id, project_id, month, resource_type_id, required_count, utilization_percentage, notes) VALUES
-(1,1,'2026-04',3,2,100,'Apollo needs Senior L1'),
-(1,1,'2026-05',3,3,100,'Apollo scale-up'),
-(1,2,'2026-04',2,1,100,'Orion needs designer'),
-(1,2,'2026-05',4,2,100,'Orion needs Senior L2'),
-(1,3,'2026-06',1,2,100,'Neptune onboarding juniors'),
-(1,3,'2026-06',2,1,100,'Neptune needs designer');
+INSERT INTO scenario_project_demands (scenario_id, project_id, month, demand_from_date, demand_to_date, resource_type_id, required_count, utilization_percentage, notes) VALUES
+(1,1,'2026-04','2026-04-01','2026-04-30',3,2,100,'Apollo needs Senior L1'),
+(1,1,'2026-05','2026-05-01','2026-05-31',3,3,100,'Apollo scale-up'),
+(1,2,'2026-04','2026-04-01','2026-04-30',2,1,100,'Orion needs designer'),
+(1,2,'2026-05','2026-05-01','2026-06-30',4,2,100,'Orion needs Senior L2'),
+(1,3,'2026-06','2026-06-01','2026-06-30',1,2,100,'Neptune onboarding juniors'),
+(1,3,'2026-06','2026-06-01','2026-06-30',2,1,100,'Neptune needs designer');

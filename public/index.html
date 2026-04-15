@@ -67,6 +67,10 @@
         <h3 class="mb-0">Allocations</h3>
         <button class="btn btn-primary btn-sm" data-add="allocations">Add Allocation</button>
       </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4"><select id="allocationResourceFilter" class="form-select form-select-sm"></select></div>
+        <div class="col-md-4"><select id="allocationProjectFilter" class="form-select form-select-sm"></select></div>
+      </div>
       <div class="table-responsive"><table class="table table-sm" id="allocationsTable"></table></div>
       <small class="text-muted">Tip: Utilization over 100% total per resource is allowed and shown in resource summary.</small>
     </section>
@@ -82,6 +86,9 @@
       <h6>Skills Master</h6>
       <div class="table-responsive"><table class="table table-sm" id="skillsTable"></table></div>
       <h6 class="mt-3">Resource Skills</h6>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4"><select id="resourceSkillResourceFilter" class="form-select form-select-sm"></select></div>
+      </div>
       <div class="table-responsive"><table class="table table-sm" id="resourceSkillsTable"></table></div>
     </section>
 
@@ -96,6 +103,9 @@
       <h6>Scenarios</h6>
       <div class="table-responsive"><table class="table table-sm" id="scenariosTable"></table></div>
       <h6 class="mt-3">Scenario Project Demands</h6>
+      <div class="row g-2 mb-2">
+        <div class="col-md-4"><select id="demandScenarioFilter" class="form-select form-select-sm"></select></div>
+      </div>
       <div class="table-responsive"><table class="table table-sm" id="demandsTable"></table></div>
     </section>
 

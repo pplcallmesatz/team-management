@@ -29,6 +29,13 @@ const monthRange = (startMonth, endMonth) => {
   return months;
 };
 
+const monthOverlapsRange = (month, fromDate, toDate) => {
+  const mStart = new Date(`${month}-01T00:00:00Z`);
+  const mEnd = new Date(Date.UTC(mStart.getUTCFullYear(), mStart.getUTCMonth() + 1, 0, 23, 59, 59));
+  const from = new Date(`${String(fromDate).slice(0, 10)}T00:00:00Z`);
+  const to = new Date(`${String(toDate).slice(0, 10)}T23:59:59Z`);
+  return from <= mEnd && to >= mStart;
+};
 const crudConfig = {
   resources: { table: 'resources', pk: 'resource_id' },
   resource_types: { table: 'resource_types', pk: 'resource_type_id' },
@@ -185,25 +192,47 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
     const months = monthRange(scenario.start_month, scenario.end_month);
 
     const [resourceTypes] = await pool.query('SELECT resource_type_id, type_name, rate_card_min, rate_card_max FROM resource_types ORDER BY resource_type_id');
-    const [availableRows] = await pool.query(`
-      SELECT resource_type_id, COUNT(*) AS available_count
+    const [activeResourceRows] = await pool.query(`
+      SELECT resource_id, resource_type_id
       FROM resources
       WHERE status='Active'
-      GROUP BY resource_type_id
     `);
     const [salaryRows] = await pool.query("SELECT IFNULL(SUM(current_ctc/12),0) AS salary_monthly FROM resources WHERE status='Active'");
+    const [allocationRows] = await pool.query(`
+      SELECT resource_id, from_date, to_date
+      FROM allocations
+    `);
     const [demandRows] = await pool.query(`
-      SELECT month, resource_type_id, SUM(required_count * (utilization_percentage/100)) AS demand_count
+      SELECT month, resource_type_id,
+             IFNULL(demand_from_date, CONCAT(month, '-01')) AS demand_from_date,
+             IFNULL(demand_to_date, LAST_DAY(CONCAT(month, '-01'))) AS demand_to_date,
+             required_count,
+             utilization_percentage
       FROM scenario_project_demands
       WHERE scenario_id=?
-      GROUP BY month, resource_type_id
     `, [req.params.scenarioId]);
 
-    const availableByType = Object.fromEntries(availableRows.map((r) => [r.resource_type_id, Number(r.available_count)]));
+    const activeByType = {};
+    activeResourceRows.forEach((r) => {
+      activeByType[r.resource_type_id] = activeByType[r.resource_type_id] || [];
+      activeByType[r.resource_type_id].push(r.resource_id);
+    });
+
+    const allocationsByResource = {};
+    allocationRows.forEach((a) => {
+      allocationsByResource[a.resource_id] = allocationsByResource[a.resource_id] || [];
+      allocationsByResource[a.resource_id].push(a);
+    });
+
     const demandMap = {};
     for (const row of demandRows) {
-      demandMap[`${row.month}|${row.resource_type_id}`] = Number(row.demand_count);
+      const coveredMonths = monthRange(String(row.demand_from_date).slice(0, 7), String(row.demand_to_date).slice(0, 7));
+      coveredMonths.forEach((month) => {
+        const key = `${month}|${row.resource_type_id}`;
+        demandMap[key] = Number((demandMap[key] || 0) + (Number(row.required_count) * (Number(row.utilization_percentage) / 100)));
+      });
     }
+
     const salaryMonthly = Number(salaryRows[0]?.salary_monthly || 0);
 
     const summary = months.map((month) => {
@@ -215,14 +244,19 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
       let revenue = 0;
 
       const designations = resourceTypes.map((rt) => {
-        const available = availableByType[rt.resource_type_id] || 0;
+        const activeIds = activeByType[rt.resource_type_id] || [];
+        const occupiedByActualAlloc = activeIds.filter((resourceId) => {
+          const allocs = allocationsByResource[resourceId] || [];
+          return allocs.some((a) => monthOverlapsRange(month, a.from_date, a.to_date));
+        }).length;
+        const available = Math.max(activeIds.length - occupiedByActualAlloc, 0);
         const demand = Number((demandMap[`${month}|${rt.resource_type_id}`] || 0).toFixed(2));
         const occupied = Math.min(available, demand);
         const bench = Math.max(available - demand, 0);
         const shortage = Math.max(demand - available, 0);
-        const avgRate = (Number(rt.rate_card_min) + Number(rt.rate_card_max)) / 2;
-        const typeRevenuePotential = demand * avgRate;
-        const typeServiceableRevenue = occupied * avgRate;
+        const minRate = Number(rt.rate_card_min);
+        const typeRevenuePotential = demand * minRate;
+        const typeServiceableRevenue = occupied * minRate;
 
         totalAvailable += available;
         totalDemand += demand;
@@ -266,24 +300,47 @@ app.get('/api/projection/:scenarioId/summary', async (req, res) => {
 
 app.get('/api/projection/:scenarioId/project-wise', async (req, res) => {
   try {
+    const [scenarioRows] = await pool.query('SELECT * FROM projection_scenarios WHERE scenario_id=?', [req.params.scenarioId]);
+    if (!scenarioRows.length) return res.status(404).json({ error: 'Scenario not found' });
+    const scenario = scenarioRows[0];
+    const scenarioMonths = monthRange(scenario.start_month, scenario.end_month);
+
     const [rows] = await pool.query(`
       SELECT p.project_id, p.project_name, spd.month,
-             SUM(spd.required_count * (spd.utilization_percentage/100)) AS required_resources
+             IFNULL(spd.demand_from_date, CONCAT(spd.month, '-01')) AS demand_from_date,
+             IFNULL(spd.demand_to_date, LAST_DAY(CONCAT(spd.month, '-01'))) AS demand_to_date,
+             spd.required_count,
+             spd.utilization_percentage
       FROM scenario_project_demands spd
       JOIN projects p ON p.project_id = spd.project_id
       WHERE spd.scenario_id=?
-      GROUP BY p.project_id, p.project_name, spd.month
-      ORDER BY p.project_name, spd.month
+      ORDER BY p.project_name
     `, [req.params.scenarioId]);
 
     const grouped = {};
-    for (const row of rows) {
+    rows.forEach((row) => {
       if (!grouped[row.project_id]) {
-        grouped[row.project_id] = { project_id: row.project_id, project_name: row.project_name, timeline: [] };
+        grouped[row.project_id] = {
+          project_id: row.project_id,
+          project_name: row.project_name,
+          monthTotals: Object.fromEntries(scenarioMonths.map((m) => [m, 0]))
+        };
       }
-      grouped[row.project_id].timeline.push({ month: row.month, required_resources: Number(row.required_resources) });
-    }
-    res.json(Object.values(grouped));
+      const coveredMonths = monthRange(String(row.demand_from_date).slice(0, 7), String(row.demand_to_date).slice(0, 7));
+      coveredMonths.forEach((month) => {
+        if (grouped[row.project_id].monthTotals[month] !== undefined) {
+          grouped[row.project_id].monthTotals[month] += Number(row.required_count) * (Number(row.utilization_percentage) / 100);
+        }
+      });
+    });
+
+    const response = Object.values(grouped).map((g) => ({
+      project_id: g.project_id,
+      project_name: g.project_name,
+      timeline: scenarioMonths.map((month) => ({ month, required_resources: Number(g.monthTotals[month].toFixed(2)) }))
+    }));
+
+    res.json(response);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -302,15 +359,25 @@ app.get('/api/projection/:scenarioId/bench', async (req, res) => {
       ORDER BY r.resource_type_id, r.name
     `);
 
-    const [demand] = await pool.query(`
-      SELECT resource_type_id, SUM(required_count * (utilization_percentage/100)) AS demand_count
+    const [demandRows] = await pool.query(`
+      SELECT resource_type_id,
+             IFNULL(demand_from_date, CONCAT(month, '-01')) AS demand_from_date,
+             IFNULL(demand_to_date, LAST_DAY(CONCAT(month, '-01'))) AS demand_to_date,
+             required_count,
+             utilization_percentage
       FROM scenario_project_demands
-      WHERE scenario_id=? AND month=?
-      GROUP BY resource_type_id
-    `, [req.params.scenarioId, month]);
+      WHERE scenario_id=?
+    `, [req.params.scenarioId]);
 
-    const demandByType = Object.fromEntries(demand.map((d) => [d.resource_type_id, Number(d.demand_count)]));
-    const grouped = {};
+    const demandByType = {};
+    demandRows.forEach((row) => {
+      if (monthOverlapsRange(month, row.demand_from_date, row.demand_to_date)) {
+        const key = row.resource_type_id;
+        demandByType[key] = (demandByType[key] || 0) + (Number(row.required_count) * (Number(row.utilization_percentage) / 100));
+      }
+    });
+
+        const grouped = {};
     resources.forEach((r) => {
       if (!grouped[r.resource_type_id]) grouped[r.resource_type_id] = [];
       grouped[r.resource_type_id].push(r);

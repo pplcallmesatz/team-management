@@ -11,23 +11,28 @@ const api = async (url, options) => {
   return res.json();
 };
 
-const renderTable = (elId, rows) => {
+const asDateInput = (v) => (v ? String(v).slice(0, 10) : '');
+const asMonthInput = (v) => (v ? String(v).slice(0, 7) : '');
+const chip = (label, value, kind = 'secondary') => `<span class="badge text-bg-${kind} me-1 mb-1">${label}: ${Number(value).toFixed(2).replace(/\.00$/, '')}</span>`;
+
+const renderTable = (elId, rows, { allowHtml = false } = {}) => {
   const el = document.getElementById(elId);
   if (!rows?.length) {
     el.innerHTML = '<tr><td class="text-muted">No data</td></tr>';
     return;
   }
   const cols = Object.keys(rows[0]);
-  el.innerHTML = `<thead><tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${r[c] ?? ''}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  el.innerHTML = `<thead><tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${allowHtml ? (r[c] ?? '') : String(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
 };
 
-const renderCrudTable = (elId, rows, entity) => {
+const renderCrudTable = (elId, rows, entity, options = {}) => {
   const el = document.getElementById(elId);
   if (!rows?.length) {
     el.innerHTML = '<tr><td class="text-muted">No data</td></tr>';
     return;
   }
-  const cols = Object.keys(rows[0]).filter((c) => !c.endsWith('_at'));
+  const hiddenCols = options.hiddenCols || [];
+  const cols = Object.keys(rows[0]).filter((c) => !c.endsWith('_at') && !hiddenCols.includes(c));
   const pk = entityConfigs[entity].pk;
 
   el.innerHTML = `
@@ -55,9 +60,7 @@ const showSection = (name) => {
   document.getElementById(`${name}Section`).classList.remove('d-none');
 };
 
-document.querySelectorAll('.menu-btn').forEach((btn) => {
-  btn.addEventListener('click', () => showSection(btn.dataset.section));
-});
+document.querySelectorAll('.menu-btn').forEach((btn) => btn.addEventListener('click', () => showSection(btn.dataset.section)));
 
 const entityConfigs = {
   resources: {
@@ -99,10 +102,7 @@ const entityConfigs = {
       { name: 'notes', type: 'textarea' }
     ]
   },
-  skills: {
-    pk: 'skill_id',
-    fields: [{ name: 'skill_name', required: true }, { name: 'category' }]
-  },
+  skills: { pk: 'skill_id', fields: [{ name: 'skill_name', required: true }, { name: 'category' }] },
   resource_skills: {
     pk: 'resource_skill_id',
     fields: [
@@ -133,6 +133,8 @@ const entityConfigs = {
       { name: 'scenario_id', type: 'select', source: 'projection_scenarios', labelKey: 'scenario_name', valueKey: 'scenario_id', required: true },
       { name: 'project_id', type: 'select', source: 'projects', labelKey: 'project_name', valueKey: 'project_id', required: true },
       { name: 'month', type: 'month', required: true },
+      { name: 'demand_from_date', type: 'date' },
+      { name: 'demand_to_date', type: 'date' },
       { name: 'resource_type_id', type: 'select', source: 'resource_types', labelKey: 'type_name', valueKey: 'resource_type_id', required: true },
       { name: 'required_count', type: 'number', step: '0.01', required: true },
       { name: 'utilization_percentage', type: 'number', step: '0.01', required: true },
@@ -141,12 +143,19 @@ const entityConfigs = {
   }
 };
 
-const state = { data: {}, edit: null };
+const state = { data: {}, edit: null, timelineSummary: [] };
 const crudModal = new bootstrap.Modal(document.getElementById('crudModal'));
-
 let spendRevenueChart;
 let utilizationChart;
 let projectionChart;
+
+const idMap = {
+  resourceName: (id) => (state.data.resources || []).find((r) => String(r.resource_id) === String(id))?.name || id,
+  projectName: (id) => (state.data.projects || []).find((p) => String(p.project_id) === String(id))?.project_name || id,
+  typeName: (id) => (state.data.resource_types || []).find((t) => String(t.resource_type_id) === String(id))?.type_name || id,
+  skillName: (id) => (state.data.skills || []).find((s) => String(s.skill_id) === String(id))?.skill_name || id,
+  scenarioName: (id) => (state.data.projection_scenarios || []).find((s) => String(s.scenario_id) === String(id))?.scenario_name || id
+};
 
 const loadDashboard = async () => {
   const data = await api('/api/dashboard');
@@ -162,38 +171,84 @@ const loadDashboard = async () => {
 
   if (spendRevenueChart) spendRevenueChart.destroy();
   if (utilizationChart) utilizationChart.destroy();
-  spendRevenueChart = new Chart(document.getElementById('spendRevenueChart'), {
-    type: 'bar',
-    data: { labels: ['Salary Spend', 'Revenue', 'Profit'], datasets: [{ label: 'Amount', data: [data.total_monthly_salary_spend, data.total_monthly_revenue_potential, data.profit] }] }
-  });
-  utilizationChart = new Chart(document.getElementById('utilizationChart'), {
-    type: 'doughnut',
-    data: { labels: ['Utilized', 'Bench'], datasets: [{ data: [data.current_utilization_percent, Math.max(100 - data.current_utilization_percent, 0)] }] }
-  });
+  spendRevenueChart = new Chart(document.getElementById('spendRevenueChart'), { type: 'bar', data: { labels: ['Salary Spend', 'Revenue', 'Profit'], datasets: [{ label: 'Amount', data: [data.total_monthly_salary_spend, data.total_monthly_revenue_potential, data.profit] }] } });
+  utilizationChart = new Chart(document.getElementById('utilizationChart'), { type: 'doughnut', data: { labels: ['Utilized', 'Bench'], datasets: [{ data: [data.current_utilization_percent, Math.max(100 - data.current_utilization_percent, 0)] }] } });
+};
+
+const renderDemandTable = () => {
+  const selectedScenarioId = document.getElementById('demandScenarioFilter')?.value || '';
+  let rows = [...(state.data.scenario_project_demands || [])];
+  if (selectedScenarioId) rows = rows.filter((r) => String(r.scenario_id) === String(selectedScenarioId));
+  const transformed = rows.map((r) => ({
+    ...r,
+    scenario_name: idMap.scenarioName(r.scenario_id),
+    project_name: idMap.projectName(r.project_id),
+    resource_type: idMap.typeName(r.resource_type_id)
+  }));
+  renderCrudTable('demandsTable', transformed, 'scenario_project_demands', { hiddenCols: ['scenario_id', 'project_id', 'resource_type_id'] });
+};
+
+const renderAllocationTable = () => {
+  const resourceFilter = document.getElementById('allocationResourceFilter')?.value || '';
+  const projectFilter = document.getElementById('allocationProjectFilter')?.value || '';
+  let rows = [...(state.data.allocations || [])];
+  if (resourceFilter) rows = rows.filter((r) => String(r.resource_id) === String(resourceFilter));
+  if (projectFilter) rows = rows.filter((r) => String(r.project_id) === String(projectFilter));
+  const transformed = rows.map((r) => ({
+    ...r,
+    resource_name: idMap.resourceName(r.resource_id),
+    project_name: idMap.projectName(r.project_id)
+  }));
+  renderCrudTable('allocationsTable', transformed, 'allocations', { hiddenCols: ['resource_id', 'project_id'] });
+};
+
+const renderResourceSkillsTable = () => {
+  const resourceFilter = document.getElementById('resourceSkillResourceFilter')?.value || '';
+  let rows = [...(state.data.resource_skills || [])];
+  if (resourceFilter) rows = rows.filter((r) => String(r.resource_id) === String(resourceFilter));
+  const transformed = rows.map((r) => ({
+    ...r,
+    resource_name: idMap.resourceName(r.resource_id),
+    skill_name: idMap.skillName(r.skill_id)
+  }));
+  renderCrudTable('resourceSkillsTable', transformed, 'resource_skills', { hiddenCols: ['resource_id', 'skill_id'] });
+};
+
+const populateFilterSelect = (id, list, valueKey, labelKey, placeholder) => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const current = el.value;
+  el.innerHTML = `<option value="">${placeholder}</option>${list.map((x) => `<option value="${x[valueKey]}">${x[labelKey]}</option>`).join('')}`;
+  if ([...el.options].some((o) => o.value === current)) el.value = current;
 };
 
 const refreshEntityData = async () => {
   const entities = ['resources', 'resource_types', 'projects', 'allocations', 'skills', 'resource_skills', 'resource_comments', 'projection_scenarios', 'scenario_project_demands'];
-  await Promise.all(entities.map(async (entity) => {
-    state.data[entity] = await api(`/api/${entity}`);
-  }));
+  await Promise.all(entities.map(async (entity) => { state.data[entity] = await api(`/api/${entity}`); }));
 
   state.data.resource_summary = await api('/api/resources/summary/list');
 
   renderCrudTable('resourceTypesTable', state.data.resource_types, 'resource_types');
   renderCrudTable('projectsTable', state.data.projects, 'projects');
-  renderCrudTable('allocationsTable', state.data.allocations, 'allocations');
+  renderAllocationTable();
   renderCrudTable('skillsTable', state.data.skills, 'skills');
-  renderCrudTable('resourceSkillsTable', state.data.resource_skills, 'resource_skills');
+  renderResourceSkillsTable();
   renderCrudTable('scenariosTable', state.data.projection_scenarios, 'projection_scenarios');
-  renderCrudTable('demandsTable', state.data.scenario_project_demands, 'scenario_project_demands');
+  renderDemandTable();
 
   window._resources = state.data.resource_summary;
   renderCrudTable('resourcesTable', state.data.resource_summary, 'resources');
-  renderCrudTable('resourceCommentsTable', state.data.resource_comments, 'resource_comments');
 
-  const select = document.getElementById('scenarioSelect');
-  select.innerHTML = state.data.projection_scenarios.map((s) => `<option value="${s.scenario_id}">${s.scenario_name}</option>`).join('');
+  const comments = (state.data.resource_comments || []).map((c) => ({ ...c, resource_name: idMap.resourceName(c.resource_id) }));
+  renderCrudTable('resourceCommentsTable', comments, 'resource_comments', { hiddenCols: ['resource_id'] });
+
+  const scenarioOptions = state.data.projection_scenarios.map((s) => `<option value="${s.scenario_id}">${s.scenario_name}</option>`).join('');
+  document.getElementById('scenarioSelect').innerHTML = scenarioOptions;
+
+  populateFilterSelect('demandScenarioFilter', state.data.projection_scenarios, 'scenario_id', 'scenario_name', 'All scenarios');
+  populateFilterSelect('allocationResourceFilter', state.data.resources, 'resource_id', 'name', 'All resources');
+  populateFilterSelect('allocationProjectFilter', state.data.projects, 'project_id', 'project_name', 'All projects');
+  populateFilterSelect('resourceSkillResourceFilter', state.data.resources, 'resource_id', 'name', 'All resources');
 };
 
 document.getElementById('resourceSearch').addEventListener('input', (e) => {
@@ -202,20 +257,23 @@ document.getElementById('resourceSearch').addEventListener('input', (e) => {
   renderCrudTable('resourcesTable', filtered, 'resources');
 });
 
+const normalizeFieldValue = (f, value) => {
+  if (value == null) return '';
+  if (f.type === 'date') return asDateInput(value);
+  if (f.type === 'month') return asMonthInput(value);
+  return value;
+};
+
 const openCrudModal = (entity, row = null) => {
   state.edit = { entity, row };
   const cfg = entityConfigs[entity];
   document.getElementById('crudModalTitle').textContent = `${row ? 'Edit' : 'Add'} ${entity.replaceAll('_', ' ')}`;
 
   const html = cfg.fields.map((f) => {
-    const value = row?.[f.name] ?? '';
-    if (f.type === 'textarea') {
-      return `<div class="mb-2"><label class="form-label">${f.name}</label><textarea class="form-control" name="${f.name}" ${f.required ? 'required' : ''}>${value}</textarea></div>`;
-    }
+    const value = normalizeFieldValue(f, row?.[f.name]);
+    if (f.type === 'textarea') return `<div class="mb-2"><label class="form-label">${f.name}</label><textarea class="form-control" name="${f.name}" ${f.required ? 'required' : ''}>${value}</textarea></div>`;
     if (f.type === 'select') {
-      const options = f.options
-        ? f.options.map((o) => (typeof o === 'object' ? o : { label: o, value: o }))
-        : (state.data[f.source] || []).map((o) => ({ label: o[f.labelKey], value: o[f.valueKey] }));
+      const options = f.options ? f.options.map((o) => (typeof o === 'object' ? o : { label: o, value: o })) : (state.data[f.source] || []).map((o) => ({ label: o[f.labelKey], value: o[f.valueKey] }));
       return `<div class="mb-2"><label class="form-label">${f.name}</label><select class="form-select" name="${f.name}" ${f.required ? 'required' : ''}><option value="">Select</option>${options.map((o) => `<option value="${o.value}" ${String(o.value) === String(value) ? 'selected' : ''}>${o.label}</option>`).join('')}</select></div>`;
     }
     return `<div class="mb-2"><label class="form-label">${f.name}</label><input class="form-control" type="${f.type || 'text'}" name="${f.name}" value="${value}" ${f.required ? 'required' : ''} ${f.step ? `step="${f.step}"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}></div>`;
@@ -225,9 +283,7 @@ const openCrudModal = (entity, row = null) => {
   crudModal.show();
 };
 
-document.querySelectorAll('[data-add]').forEach((btn) => {
-  btn.addEventListener('click', () => openCrudModal(btn.dataset.add));
-});
+document.querySelectorAll('[data-add]').forEach((btn) => btn.addEventListener('click', () => openCrudModal(btn.dataset.add)));
 
 document.getElementById('crudForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -260,13 +316,8 @@ document.addEventListener('click', async (e) => {
 
   if (editBtn) {
     const entity = editBtn.dataset.edit;
-    if (entity === 'resources') {
-      const full = await api(`/api/resources/${editBtn.dataset.id}`);
-      openCrudModal(entity, full);
-      return;
-    }
-    const row = (state.data[entity] || []).find((r) => String(r[entityConfigs[entity].pk]) === String(editBtn.dataset.id));
-    openCrudModal(entity, row);
+    const full = await api(`/api/${entity}/${editBtn.dataset.id}`);
+    openCrudModal(entity, full);
   }
 
   if (delBtn) {
@@ -279,32 +330,39 @@ document.addEventListener('click', async (e) => {
   }
 });
 
+const toChipCell = (designations, key, badgeType) => designations
+  .filter((d) => Number(d[key]) > 0)
+  .map((d) => chip(d.type_name, d[key], badgeType))
+  .join('') || '<span class="text-muted">0</span>';
+
 const loadTimeline = async () => {
   const scenarioId = document.getElementById('scenarioSelect').value;
   if (!scenarioId) return;
 
   const summaryResp = await api(`/api/projection/${scenarioId}/summary`);
-  renderTable('timelineTable', summaryResp.summary.map((m) => ({
+  state.timelineSummary = summaryResp.summary || [];
+
+  renderTable('timelineTable', state.timelineSummary.map((m) => ({
     month: m.month,
     total_available: m.total_available,
-    total_demand: m.total_demand,
+    total_demand: toChipCell(m.designations, 'demand_count', 'info'),
     occupied_count: m.occupied_count,
-    bench_count: m.bench_count,
-    shortage_count: m.shortage_count,
+    bench_count: toChipCell(m.designations, 'bench_count', 'warning'),
+    shortage_count: toChipCell(m.designations, 'shortage_count', 'danger'),
     salary_spend: m.salary_spend,
     revenue_potential: m.revenue_potential,
     profit_estimate: m.profit_estimate
-  })));
+  })), { allowHtml: true });
 
   if (projectionChart) projectionChart.destroy();
   projectionChart = new Chart(document.getElementById('projectionChart'), {
     type: 'line',
     data: {
-      labels: summaryResp.summary.map((m) => m.month),
+      labels: state.timelineSummary.map((m) => m.month),
       datasets: [
-        { label: 'Demand', data: summaryResp.summary.map((m) => m.total_demand) },
-        { label: 'Available', data: summaryResp.summary.map((m) => m.total_available) },
-        { label: 'Profit', data: summaryResp.summary.map((m) => m.profit_estimate) }
+        { label: 'Demand', data: state.timelineSummary.map((m) => m.total_demand) },
+        { label: 'Available', data: state.timelineSummary.map((m) => m.total_available) },
+        { label: 'Profit', data: state.timelineSummary.map((m) => m.profit_estimate) }
       ]
     }
   });
@@ -330,10 +388,13 @@ document.getElementById('downloadCsv').addEventListener('click', () => {
   window.open(`/api/reports/scenario/${scenarioId}/csv`, '_blank');
 });
 
+document.getElementById('demandScenarioFilter').addEventListener('change', renderDemandTable);
+document.getElementById('allocationResourceFilter').addEventListener('change', renderAllocationTable);
+document.getElementById('allocationProjectFilter').addEventListener('change', renderAllocationTable);
+document.getElementById('resourceSkillResourceFilter').addEventListener('change', renderResourceSkillsTable);
+
 (async function init() {
   await loadDashboard();
   await refreshEntityData();
-  if (document.getElementById('scenarioSelect').value) {
-    await loadTimeline();
-  }
+  if (document.getElementById('scenarioSelect').value) await loadTimeline();
 })();

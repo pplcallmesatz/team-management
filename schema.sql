@@ -93,6 +93,8 @@ CREATE TABLE scenario_project_demands (
   scenario_id INT NOT NULL,
   project_id INT NOT NULL,
   month CHAR(7) NOT NULL,
+  demand_from_date DATE NULL,
+  demand_to_date DATE NULL,
   resource_type_id INT NOT NULL,
   required_count DECIMAL(8,2) NOT NULL,
   utilization_percentage DECIMAL(5,2) NOT NULL DEFAULT 100,
