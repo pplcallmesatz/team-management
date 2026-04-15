@@ -1,0 +1,4 @@
+body { background: #f5f7fb; }
+.sidebar { width: 260px; min-height: 100vh; position: sticky; top: 0; }
+main { flex: 1; }
+.card.metric-card { border-left: 4px solid #0d6efd; }
