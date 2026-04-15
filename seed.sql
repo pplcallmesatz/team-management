@@ -53,7 +53,7 @@ INSERT INTO scenario_project_demands (scenario_id, project_id, month, demand_fro
 (1,3,'2026-06','2026-06-01','2026-06-30',2,1,100,'Neptune needs designer');
 
 
-INSERT INTO performance_trackers (resource_id, project_id, project_owner_name, quarter, comments) VALUES
-(2,1,'Evan Cruz','Q1','Strong delivery ownership and frontend quality.'),
-(1,2,'Charlie Kim','Q1','Improved design consistency across key screens.'),
-(3,1,'Evan Cruz','Q2','Provided solid architecture and mentorship support.');
+INSERT INTO performance_trackers (resource_id, project_id, project_owner_name, financial_year, quarter, comments) VALUES
+(2,1,'Evan Cruz','2026-27','Q1','Strong delivery ownership and frontend quality.'),
+(1,2,'Charlie Kim','2026-27','Q1','Improved design consistency across key screens.'),
+(3,1,'Evan Cruz','2026-27','Q2','Provided solid architecture and mentorship support.');

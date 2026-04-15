@@ -145,6 +145,7 @@ const entityConfigs = {
       { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
       { name: 'project_id', type: 'select', source: 'projects', labelKey: 'project_name', valueKey: 'project_id', required: true },
       { name: 'project_owner_name', required: true },
+      { name: 'financial_year', required: true, placeholder: 'YYYY-YY (e.g. 2026-27)' },
       { name: 'quarter', type: 'select', options: ['Q1', 'Q2', 'Q3', 'Q4'], required: true },
       { name: 'comments', type: 'textarea', required: true }
     ]
@@ -243,7 +244,15 @@ const renderAllocationTable = () => {
 };
 
 const renderPerformanceTable = () => {
-  const rows = [...(state.data.performance_trackers || [])];
+  const fyFilter = document.getElementById('performanceFyFilter')?.value || '';
+  const userFilter = document.getElementById('performanceUserFilter')?.value || '';
+  const quarterFilter = document.getElementById('performanceQuarterFilter')?.value || '';
+
+  let rows = [...(state.data.performance_trackers || [])];
+  if (fyFilter) rows = rows.filter((r) => String(r.financial_year) === String(fyFilter));
+  if (userFilter) rows = rows.filter((r) => String(r.resource_id) === String(userFilter));
+  if (quarterFilter) rows = rows.filter((r) => String(r.quarter) === String(quarterFilter));
+
   const transformed = rows.map((r) => ({
     ...r,
     resource_name: idMap.resourceName(r.resource_id),
@@ -312,6 +321,14 @@ const refreshEntityData = async () => {
   populateFilterSelect('allocationResourceFilter', state.data.resources, 'resource_id', 'name', 'All resources');
   populateFilterSelect('allocationProjectFilter', state.data.projects, 'project_id', 'project_name', 'All projects');
   populateFilterSelect('resourceSkillResourceFilter', state.data.resources, 'resource_id', 'name', 'All resources');
+  const fyValues = [...new Set((state.data.performance_trackers || []).map((r) => r.financial_year).filter(Boolean))];
+  const fyEl = document.getElementById('performanceFyFilter');
+  if (fyEl) {
+    const current = fyEl.value;
+    fyEl.innerHTML = `<option value="">All Financial Years</option>${fyValues.map((fy) => `<option value="${fy}">${fy}</option>`).join('')}`;
+    if ([...fyEl.options].some((o) => o.value === current)) fyEl.value = current;
+  }
+  populateFilterSelect('performanceUserFilter', state.data.resources, 'resource_id', 'name', 'All Users');
 };
 
 document.getElementById('resourceSearch').addEventListener('input', (e) => {
@@ -339,7 +356,7 @@ const openCrudModal = (entity, row = null) => {
       const options = f.options ? f.options.map((o) => (typeof o === 'object' ? o : { label: o, value: o })) : (state.data[f.source] || []).map((o) => ({ label: o[f.labelKey], value: o[f.valueKey] }));
       return `<div class="mb-2"><label class="form-label">${f.name}</label><select class="form-select" name="${f.name}" ${f.required ? 'required' : ''}><option value="">Select</option>${options.map((o) => `<option value="${o.value}" ${String(o.value) === String(value) ? 'selected' : ''}>${o.label}</option>`).join('')}</select></div>`;
     }
-    return `<div class="mb-2"><label class="form-label">${f.name}</label><input class="form-control" type="${f.type || 'text'}" name="${f.name}" value="${value}" ${f.required ? 'required' : ''} ${f.step ? `step="${f.step}"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}></div>`;
+    return `<div class="mb-2"><label class="form-label">${f.name}</label><input class="form-control" type="${f.type || 'text'}" name="${f.name}" value="${value}" ${f.placeholder ? `placeholder="${f.placeholder}"` : ''} ${f.required ? 'required' : ''} ${f.step ? `step="${f.step}"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}></div>`;
   }).join('');
 
   document.getElementById('crudFormFields').innerHTML = html;
@@ -466,3 +483,7 @@ document.getElementById('resourceSkillResourceFilter').addEventListener('change'
   await refreshEntityData();
   if (document.getElementById('scenarioSelect').value) await loadTimeline();
 })();
+
+document.getElementById('performanceFyFilter').addEventListener('change', renderPerformanceTable);
+document.getElementById('performanceUserFilter').addEventListener('change', renderPerformanceTable);
+document.getElementById('performanceQuarterFilter').addEventListener('change', renderPerformanceTable);

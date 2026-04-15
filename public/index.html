@@ -100,6 +100,17 @@
         <h3 class="mb-0">Performance Tracker</h3>
         <button class="btn btn-primary btn-sm" data-add="performance_trackers">Add Performance</button>
       </div>
+      <div class="row g-2 mb-2">
+        <div class="col-md-3"><select id="performanceFyFilter" class="form-select form-select-sm"></select></div>
+        <div class="col-md-3"><select id="performanceUserFilter" class="form-select form-select-sm"></select></div>
+        <div class="col-md-3"><select id="performanceQuarterFilter" class="form-select form-select-sm">
+          <option value="">All Quarters</option>
+          <option value="Q1">Q1</option>
+          <option value="Q2">Q2</option>
+          <option value="Q3">Q3</option>
+          <option value="Q4">Q4</option>
+        </select></div>
+      </div>
       <div class="table-responsive"><table class="table table-sm" id="performanceTable"></table></div>
     </section>
 

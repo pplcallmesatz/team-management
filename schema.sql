@@ -111,6 +111,7 @@ CREATE TABLE performance_trackers (
   resource_id INT NOT NULL,
   project_id INT NOT NULL,
   project_owner_name VARCHAR(120) NOT NULL,
+  financial_year VARCHAR(9) NOT NULL,
   quarter ENUM('Q1','Q2','Q3','Q4') NOT NULL,
   comments TEXT NOT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
