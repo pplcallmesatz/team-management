@@ -46,6 +46,7 @@ const renderCrudTable = (elId, rows, entity, options = {}) => {
   const hiddenCols = options.hiddenCols || [];
   const cols = Object.keys(rows[0]).filter((c) => !c.endsWith('_at') && !hiddenCols.includes(c));
   const pk = entityConfigs[entity].pk;
+
   el.innerHTML = `
     <thead>
       <tr>
@@ -136,6 +137,16 @@ const entityConfigs = {
     fields: [
       { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
       { name: 'comment_text', type: 'textarea', required: true }
+    ]
+  },
+  performance_trackers: {
+    pk: 'performance_id',
+    fields: [
+      { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
+      { name: 'project_id', type: 'select', source: 'projects', labelKey: 'project_name', valueKey: 'project_id', required: true },
+      { name: 'project_owner_name', required: true },
+      { name: 'quarter', type: 'select', options: ['Q1', 'Q2', 'Q3', 'Q4'], required: true },
+      { name: 'comments', type: 'textarea', required: true }
     ]
   },
   scenario_project_demands: {
@@ -231,6 +242,16 @@ const renderAllocationTable = () => {
   renderCrudTable('allocationsTable', transformed, 'allocations', { hiddenCols: ['resource_id', 'project_id'] });
 };
 
+const renderPerformanceTable = () => {
+  const rows = [...(state.data.performance_trackers || [])];
+  const transformed = rows.map((r) => ({
+    ...r,
+    resource_name: idMap.resourceName(r.resource_id),
+    project_name: idMap.projectName(r.project_id)
+  }));
+  renderCrudTable('performanceTable', transformed, 'performance_trackers', { hiddenCols: ['resource_id', 'project_id'] });
+};
+
 const renderResourceSkillsTable = () => {
   const resourceFilter = document.getElementById('resourceSkillResourceFilter')?.value || '';
   let rows = [...(state.data.resource_skills || [])];
@@ -252,7 +273,7 @@ const populateFilterSelect = (id, list, valueKey, labelKey, placeholder) => {
 };
 
 const refreshEntityData = async () => {
-  const entities = ['resources', 'resource_types', 'projects', 'allocations', 'skills', 'resource_skills', 'resource_comments', 'projection_scenarios', 'scenario_project_demands'];
+  const entities = ['resources', 'resource_types', 'projects', 'allocations', 'skills', 'resource_skills', 'resource_comments', 'performance_trackers', 'projection_scenarios', 'scenario_project_demands'];
   await Promise.all(entities.map(async (entity) => { state.data[entity] = await api(`/api/${entity}`); }));
 
   state.data.resource_summary = await api('/api/resources/summary/list');
@@ -274,6 +295,7 @@ const refreshEntityData = async () => {
   renderAllocationTable();
   renderCrudTable('skillsTable', state.data.skills, 'skills');
   renderResourceSkillsTable();
+  renderPerformanceTable();
   renderCrudTable('scenariosTable', state.data.projection_scenarios, 'projection_scenarios');
   renderDemandTable();
 

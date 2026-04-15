@@ -19,6 +19,7 @@
       <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="projects">Projects</button></li>
       <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="allocations">Allocations (Actual)</button></li>
       <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="skills">Skill Matrix</button></li>
+      <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="performance">Performance Tracker</button></li>
       <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="scenarios">Projection Scenarios</button></li>
       <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="timeline">Projection Timeline View</button></li>
       <li><button class="btn btn-sm btn-outline-light w-100 menu-btn" data-section="reports">Reports Export (CSV)</button></li>
@@ -90,6 +91,16 @@
         <div class="col-md-4"><select id="resourceSkillResourceFilter" class="form-select form-select-sm"></select></div>
       </div>
       <div class="table-responsive"><table class="table table-sm" id="resourceSkillsTable"></table></div>
+    </section>
+
+
+
+    <section id="performanceSection" class="app-section d-none">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h3 class="mb-0">Performance Tracker</h3>
+        <button class="btn btn-primary btn-sm" data-add="performance_trackers">Add Performance</button>
+      </div>
+      <div class="table-responsive"><table class="table table-sm" id="performanceTable"></table></div>
     </section>
 
     <section id="scenariosSection" class="app-section d-none">

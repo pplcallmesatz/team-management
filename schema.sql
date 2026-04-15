@@ -104,3 +104,17 @@ CREATE TABLE scenario_project_demands (
   FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
   FOREIGN KEY (resource_type_id) REFERENCES resource_types(resource_type_id) ON DELETE CASCADE
 );
+
+
+CREATE TABLE performance_trackers (
+  performance_id INT AUTO_INCREMENT PRIMARY KEY,
+  resource_id INT NOT NULL,
+  project_id INT NOT NULL,
+  project_owner_name VARCHAR(120) NOT NULL,
+  quarter ENUM('Q1','Q2','Q3','Q4') NOT NULL,
+  comments TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (resource_id) REFERENCES resources(resource_id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+);

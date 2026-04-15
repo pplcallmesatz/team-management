@@ -83,7 +83,8 @@ const crudConfig = {
   resource_skills: { table: 'resource_skills', pk: 'resource_skill_id' },
   projection_scenarios: { table: 'projection_scenarios', pk: 'scenario_id' },
   scenario_project_demands: { table: 'scenario_project_demands', pk: 'demand_id' },
-  resource_comments: { table: 'resource_comments', pk: 'comment_id' }
+  resource_comments: { table: 'resource_comments', pk: 'comment_id' },
+  performance_trackers: { table: 'performance_trackers', pk: 'performance_id' }
 };
 
 for (const [route, cfg] of Object.entries(crudConfig)) {
