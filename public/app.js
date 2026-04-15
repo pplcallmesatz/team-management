@@ -120,6 +120,13 @@ const entityConfigs = {
       { name: 'notes', type: 'textarea' }
     ]
   },
+  resource_comments: {
+    pk: 'comment_id',
+    fields: [
+      { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
+      { name: 'comment_text', type: 'textarea', required: true }
+    ]
+  },
   scenario_project_demands: {
     pk: 'demand_id',
     fields: [
@@ -166,7 +173,7 @@ const loadDashboard = async () => {
 };
 
 const refreshEntityData = async () => {
-  const entities = ['resources', 'resource_types', 'projects', 'allocations', 'skills', 'resource_skills', 'projection_scenarios', 'scenario_project_demands'];
+  const entities = ['resources', 'resource_types', 'projects', 'allocations', 'skills', 'resource_skills', 'resource_comments', 'projection_scenarios', 'scenario_project_demands'];
   await Promise.all(entities.map(async (entity) => {
     state.data[entity] = await api(`/api/${entity}`);
   }));
@@ -183,6 +190,7 @@ const refreshEntityData = async () => {
 
   window._resources = state.data.resource_summary;
   renderCrudTable('resourcesTable', state.data.resource_summary, 'resources');
+  renderCrudTable('resourceCommentsTable', state.data.resource_comments, 'resource_comments');
 
   const select = document.getElementById('scenarioSelect');
   select.innerHTML = state.data.projection_scenarios.map((s) => `<option value="${s.scenario_id}">${s.scenario_name}</option>`).join('');
@@ -202,11 +210,13 @@ const openCrudModal = (entity, row = null) => {
   const html = cfg.fields.map((f) => {
     const value = row?.[f.name] ?? '';
     if (f.type === 'textarea') {
-      return `<div class="mb-2"><label class="form-label">${f.name}</label><textarea class="form-control" name="${f.name}">${value}</textarea></div>`;
+      return `<div class="mb-2"><label class="form-label">${f.name}</label><textarea class="form-control" name="${f.name}" ${f.required ? 'required' : ''}>${value}</textarea></div>`;
     }
     if (f.type === 'select') {
-      const options = f.options || (state.data[f.source] || []).map((o) => ({ label: o[f.labelKey], value: o[f.valueKey] }));
-      return `<div class="mb-2"><label class="form-label">${f.name}</label><select class="form-select" name="${f.name}" ${f.required ? 'required' : ''}><option value="">Select</option>${options.map((o) => `<option value="${o.value}" ${String(o.value) === String(value) ? 'selected' : ''}>${o.label ?? o}</option>`).join('')}</select></div>`;
+      const options = f.options
+        ? f.options.map((o) => (typeof o === 'object' ? o : { label: o, value: o }))
+        : (state.data[f.source] || []).map((o) => ({ label: o[f.labelKey], value: o[f.valueKey] }));
+      return `<div class="mb-2"><label class="form-label">${f.name}</label><select class="form-select" name="${f.name}" ${f.required ? 'required' : ''}><option value="">Select</option>${options.map((o) => `<option value="${o.value}" ${String(o.value) === String(value) ? 'selected' : ''}>${o.label}</option>`).join('')}</select></div>`;
     }
     return `<div class="mb-2"><label class="form-label">${f.name}</label><input class="form-control" type="${f.type || 'text'}" name="${f.name}" value="${value}" ${f.required ? 'required' : ''} ${f.step ? `step="${f.step}"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}></div>`;
   }).join('');
