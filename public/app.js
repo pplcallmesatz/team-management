@@ -1,489 +1,56 @@
-const api = async (url, options) => {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    let message = `Failed: ${url}`;
-    try {
-      const err = await res.json();
-      message = err.error || message;
-    } catch (_e) {}
-    throw new Error(message);
-  }
-  return res.json();
+const api = async (url, options) => { const res = await fetch(url, options); if (!res.ok) throw new Error((await res.json()).error || 'Request failed'); return res.json(); };
+const state = { vendors: [], raw_materials: [], raw_material_purchases: [], packaging_materials: [], packaging_purchases: [], products: [], pricing_calculations: [] };
+const rs = (v, p = 2) => `₹${Number(v || 0).toFixed(p)}`;
+const n = (v) => Number(v || 0);
+const byId = (list, id) => list.find((x) => String(x.id) === String(id));
+const toast = (msg) => { const el = document.getElementById('toast'); el.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 2400); };
+const modal = new bootstrap.Modal(document.getElementById('crudModal'));
+let edit = null;
+
+const fields = {
+  vendors: [{name:'name',required:1},{name:'address',type:'textarea'},{name:'mobile'},{name:'website',type:'url'},{name:'email',type:'email'},{name:'vendor_type',type:'select',options:['Raw Material','Packaging Material','Both'],required:1},{name:'status',type:'select',options:['Active','Inactive'],required:1}],
+  raw_materials: [{name:'name',required:1},{name:'unit',type:'select',options:['KG','Gram','Piece'],required:1},{name:'status',type:'select',options:['Active','Inactive'],required:1}],
+  raw_material_purchases: [{name:'vendor_id',type:'select',source:'vendors',label:'name',required:1},{name:'raw_material_id',type:'select',source:'raw_materials',label:'name',required:1},{name:'purchase_date',type:'date',required:1},{name:'quantity',type:'number',step:'0.0001',min:'0.0001',required:1},{name:'unit',type:'select',options:['KG','Gram','Piece'],required:1},{name:'purchase_price',type:'number',step:'0.0001',min:'0',required:1},{name:'wastage_percent',type:'number',step:'0.0001',min:'0',max:'99.9999',required:1}],
+  packaging_materials: [{name:'name',required:1},{name:'material_type',type:'select',options:['Glass Bottle','Plastic Bottle','Pouch','Box','Cap','Jar','Label','Outer Box'],required:1},{name:'vendor_id',type:'select',source:'vendors',label:'name'},{name:'description',type:'textarea'},{name:'status',type:'select',options:['Active','Inactive'],required:1}],
+  packaging_purchases: [{name:'packaging_material_id',type:'select',source:'packaging_materials',label:'name',required:1},{name:'vendor_id',type:'select',source:'vendors',label:'name',required:1},{name:'purchase_date',type:'date',required:1},{name:'quantity',type:'number',step:'0.0001',min:'0.0001',required:1},{name:'unit',required:1},{name:'purchase_cost',type:'number',step:'0.0001',min:'0',required:1},{name:'shipping_cost',type:'number',step:'0.0001',min:'0',required:1},{name:'other_cost',type:'number',step:'0.0001',min:'0',required:1}],
+  products: [{name:'name',required:1},{name:'sku',required:1},{name:'category'},{name:'description',type:'textarea'},{name:'status',type:'select',options:['Active','Inactive'],required:1}]
 };
 
+const table = (id, rows, actions = false) => { const el = document.getElementById(id); if (!rows.length) { el.innerHTML = '<tbody><tr><td class="text-muted">No data</td></tr></tbody>'; return; } const cols = Object.keys(rows[0]); el.innerHTML = `<thead><tr>${cols.map(c=>`<th>${c}</th>`).join('')}${actions?'<th>actions</th>':''}</tr></thead><tbody>${rows.map(r=>`<tr>${cols.map(c=>`<td>${r[c]??''}</td>`).join('')}${actions?`<td><button class="btn btn-sm btn-outline-secondary" data-edit="${id}" data-id="${r.id}">Edit</button></td>`:''}</tr>`).join('')}</tbody>`; };
+const endpointFromTableId = { vendorsTable:'vendors', rawMaterialsTable:'raw_materials', packagingTable:'packaging_materials', productsTable:'products' };
 
-
-
-const asDateInput = (v) => (v ? String(v).slice(0, 10) : '');
-const asMonthInput = (v) => (v ? String(v).slice(0, 7) : '');
-const formatDate = (v) => {
-  if (!v) return '';
-  return new Date(v).toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC'
-  });
-};
-const chip = (label, value, kind = 'secondary') => `<span class="badge text-bg-${kind} me-1 mb-1">${label}: ${Number(value).toFixed(2).replace(/\.00$/, '')}</span>`;
-
-const renderTable = (elId, rows, { allowHtml = false } = {}) => {
-  const el = document.getElementById(elId);
-  if (!rows?.length) {
-    el.innerHTML = '<tr><td class="text-muted">No data</td></tr>';
-    return;
-  }
-  const cols = Object.keys(rows[0]);
-  el.innerHTML = `<thead><tr>${cols.map((c) => `<th>${c}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${cols.map((c) => `<td>${allowHtml ? (r[c] ?? '') : String(r[c] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
+const render = async () => {
+  Object.assign(state, Object.fromEntries(await Promise.all(Object.keys(state).map(async k => [k, await api(`/api/${k}`)]))));
+  const dash = await api('/api/dashboard');
+  document.getElementById('dashboardCards').innerHTML = [['Total Products',dash.total_products],['Raw Material Vendors',dash.total_raw_material_vendors],['Packaging Materials',dash.total_packaging_materials],['Total Vendors',dash.total_vendors],['Raw Purchase Value',rs(dash.raw_purchase_value)],['Packaging Purchase Value',rs(dash.packaging_purchase_value)]].map(([k,v])=>`<div class="metric"><span>${k}</span><b>${v}</b></div>`).join('');
+  table('recentPurchases', dash.recentPurchases.map(x=>({type:x.type,item:x.item,vendor:x.vendor,date:String(x.purchase_date).slice(0,10),total:rs(x.total)})));
+  table('recentPricing', dash.recentPricing.map(x=>({id:x.id,product:x.product,date:String(x.calculation_date).slice(0,10),variants:x.variants})));
+  table('vendorsTable', state.vendors.map(v=>({id:v.id,name:v.name,type:v.vendor_type,mobile:v.mobile,email:v.email,status:v.status})), true);
+  table('rawMaterialsTable', state.raw_materials.map(x=>({id:x.id,name:x.name,unit:x.unit,status:x.status})), true);
+  table('rawPurchasesTable', state.raw_material_purchases.map(x=>({id:x.id,material:x.raw_material_name,vendor:x.vendor_name,date:String(x.purchase_date).slice(0,10),quantity:`${x.quantity} ${x.unit}`,price:rs(x.purchase_price),wastage:`${x.wastage_percent}%`,usable:x.usable_quantity,cost_per_kg:x.cost_per_kg==null?'-':rs(x.cost_per_kg,4),cost_per_gram:x.cost_per_gram==null?'-':rs(x.cost_per_gram,6),cost_per_piece:x.cost_per_piece==null?'-':rs(x.cost_per_piece,4)})));
+  table('packagingTable', state.packaging_materials.map(x=>({id:x.id,name:x.name,type:x.material_type,current_cost:rs(x.current_individual_cost,4),status:x.status})), true);
+  table('packagingPurchasesTable', state.packaging_purchases.map(x=>({id:x.id,material:x.packaging_material_name,vendor:x.vendor_name,date:String(x.purchase_date).slice(0,10),qty:x.quantity,total:rs(x.total_cost),piece_cost:rs(x.individual_piece_cost,4)})));
+  table('productsTable', state.products.map(x=>({id:x.id,name:x.name,sku:x.sku,category:x.category,status:x.status})), true);
+  table('historyTable', state.pricing_calculations.map(x=>({id:x.id,product:x.product_name,raw_material:x.raw_material_name,vendor:x.vendor_name,date:String(x.calculation_date).slice(0,10),purchase:rs(x.purchase_price),wastage:`${x.wastage_percent}%`,report:`<a class="btn btn-sm btn-outline-success" target="_blank" href="/api/pricing_calculations/${x.id}/report">Download PDF</a>`})));
+  fillCalculator();
 };
 
-const renderCrudTable = (elId, rows, entity, options = {}) => {
-  const el = document.getElementById(elId);
-  if (!rows?.length) {
-    el.innerHTML = '<tr><td class="text-muted">No data</td></tr>';
-    return;
-  }
-  const hiddenCols = options.hiddenCols || [];
-  const cols = Object.keys(rows[0]).filter((c) => !c.endsWith('_at') && !hiddenCols.includes(c));
-  const pk = entityConfigs[entity].pk;
+const openCrud = async (entity, row = {}) => { edit = { entity, row }; document.getElementById('crudTitle').textContent = `${row.id?'Edit':'Add'} ${entity.replaceAll('_',' ')}`; document.getElementById('crudBody').innerHTML = fields[entity].map(f => { const value = row[f.name] ?? (f.name === 'status' ? 'Active' : f.name === 'unit' ? 'Piece' : ''); if (f.type === 'textarea') return `<label class="form-label">${f.name}</label><textarea name="${f.name}" class="form-control mb-2">${value||''}</textarea>`; if (f.type === 'select') { const opts = f.options || state[f.source].map(x=>({label:x[f.label],value:x.id})); return `<label class="form-label">${f.name}</label><select name="${f.name}" class="form-select mb-2" ${f.required?'required':''}><option value="">Select</option>${opts.map(o=>{ const ob=typeof o==='string'?{label:o,value:o}:o; return `<option value="${ob.value}" ${String(ob.value)===String(value)?'selected':''}>${ob.label}</option>`; }).join('')}</select>`; } return `<label class="form-label">${f.name}</label><input name="${f.name}" type="${f.type||'text'}" value="${value||''}" class="form-control mb-2" ${f.required?'required':''} ${f.step?`step="${f.step}"`:''} ${f.min?`min="${f.min}"`:''} ${f.max?`max="${f.max}"`:''}>`; }).join(''); modal.show(); };
 
-  el.innerHTML = `
-    <thead>
-      <tr>
-        ${cols.map((c) => `<th>${c}</th>`).join('')}
-        <th>actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${rows.map((row) => `
-        <tr>
-          ${cols.map((c) => `<td>${row[c] ?? ''}</td>`).join('')}
-          <td>
-            <button class="btn btn-outline-secondary btn-sm" data-edit="${entity}" data-id="${row[pk]}">Edit</button>
-            <button class="btn btn-outline-danger btn-sm ms-1" data-delete="${entity}" data-id="${row[pk]}">Delete</button>
-          </td>
-        </tr>
-      `).join('')}
-    </tbody>`;
-};
+document.querySelectorAll('[data-add]').forEach(b=>b.addEventListener('click',()=>openCrud(b.dataset.add)));
+document.addEventListener('click', async e => { const b = e.target.closest('[data-edit]'); if (!b) return; const entity = endpointFromTableId[b.dataset.edit]; openCrud(entity, await api(`/api/${entity}/${b.dataset.id}`)); });
+document.getElementById('crudForm').addEventListener('submit', async e => { e.preventDefault(); const data = Object.fromEntries(new FormData(e.target).entries()); const method = edit.row.id ? 'PUT' : 'POST'; const url = `/api/${edit.entity}${edit.row.id?`/${edit.row.id}`:''}`; await api(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); modal.hide(); toast('Saved successfully'); await render(); });
 
-const showSection = (name) => {
-  document.querySelectorAll('.app-section').forEach((s) => s.classList.add('d-none'));
-  document.getElementById(`${name}Section`).classList.remove('d-none');
-};
+document.querySelectorAll('.nav-btn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.nav-btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); document.querySelectorAll('.app-section').forEach(s=>s.classList.add('d-none')); document.getElementById(`${b.dataset.section}Section`).classList.remove('d-none');}));
+document.getElementById('vendorSearch').addEventListener('input', e => table('vendorsTable', state.vendors.filter(v=>v.name.toLowerCase().includes(e.target.value.toLowerCase())).map(v=>({id:v.id,name:v.name,type:v.vendor_type,mobile:v.mobile,email:v.email,status:v.status})), true));
 
-document.querySelectorAll('.menu-btn').forEach((btn) => btn.addEventListener('click', () => showSection(btn.dataset.section)));
-
-const entityConfigs = {
-  resources: {
-    pk: 'resource_id',
-    fields: [
-      { name: 'name', required: true },
-      { name: 'date_of_joining', type: 'date', required: true },
-      { name: 'past_experience', type: 'number', step: '0.01' },
-      { name: 'resource_type_id', type: 'select', source: 'resource_types', labelKey: 'type_name', valueKey: 'resource_type_id', required: true },
-      { name: 'current_ctc', type: 'number', step: '0.01', required: true },
-      { name: 'status', type: 'select', options: ['Active', 'Inactive'], required: true },
-      { name: 'notes', type: 'textarea' }
-    ]
-  },
-  resource_types: {
-    pk: 'resource_type_id',
-    fields: [
-      { name: 'type_name', required: true }, { name: 'rate_card_min', type: 'number', step: '0.01', required: true },
-      { name: 'rate_card_max', type: 'number', step: '0.01', required: true }, { name: 'salary_ctc_min', type: 'number', step: '0.01' },
-      { name: 'salary_ctc_max', type: 'number', step: '0.01' }, { name: 'description', type: 'textarea' }
-    ]
-  },
-  projects: {
-    pk: 'project_id',
-    fields: [
-      { name: 'project_name', required: true }, { name: 'client_name' }, { name: 'project_owner' },
-      { name: 'start_date', type: 'date' }, { name: 'end_date', type: 'date' },
-      { name: 'status', type: 'select', options: ['Ongoing', 'Completed', 'Upcoming'], required: true },
-      { name: 'notes', type: 'textarea' }
-    ]
-  },
-  allocations: {
-    pk: 'allocation_id',
-    fields: [
-      { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
-      { name: 'project_id', type: 'select', source: 'projects', labelKey: 'project_name', valueKey: 'project_id', required: true },
-      { name: 'from_date', type: 'date', required: true }, { name: 'to_date', type: 'date', required: true },
-      { name: 'utilization_percentage', type: 'number', step: '0.01', required: true },
-      { name: 'notes', type: 'textarea' }
-    ]
-  },
-  skills: { pk: 'skill_id', fields: [{ name: 'skill_name', required: true }, { name: 'category' }] },
-  resource_skills: {
-    pk: 'resource_skill_id',
-    fields: [
-      { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
-      { name: 'skill_id', type: 'select', source: 'skills', labelKey: 'skill_name', valueKey: 'skill_id', required: true },
-      { name: 'level', type: 'number', min: 0, max: 5, required: true }
-    ]
-  },
-  projection_scenarios: {
-    pk: 'scenario_id',
-    fields: [
-      { name: 'scenario_name', required: true },
-      { name: 'start_month', type: 'month', required: true },
-      { name: 'end_month', type: 'month', required: true },
-      { name: 'notes', type: 'textarea' }
-    ]
-  },
-  resource_comments: {
-    pk: 'comment_id',
-    fields: [
-      { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
-      { name: 'comment_text', type: 'textarea', required: true }
-    ]
-  },
-  performance_trackers: {
-    pk: 'performance_id',
-    fields: [
-      { name: 'resource_id', type: 'select', source: 'resources', labelKey: 'name', valueKey: 'resource_id', required: true },
-      { name: 'project_id', type: 'select', source: 'projects', labelKey: 'project_name', valueKey: 'project_id', required: true },
-      { name: 'project_owner_name', required: true },
-      { name: 'financial_year', required: true, placeholder: 'YYYY-YY (e.g. 2026-27)' },
-      { name: 'quarter', type: 'select', options: ['Q1', 'Q2', 'Q3', 'Q4'], required: true },
-      { name: 'comments', type: 'textarea', required: true }
-    ]
-  },
-  scenario_project_demands: {
-    pk: 'demand_id',
-    fields: [
-      { name: 'scenario_id', type: 'select', source: 'projection_scenarios', labelKey: 'scenario_name', valueKey: 'scenario_id', required: true },
-      { name: 'project_id', type: 'select', source: 'projects', labelKey: 'project_name', valueKey: 'project_id', required: true },
-      { name: 'month', type: 'month', required: true },
-      { name: 'demand_from_date', type: 'date' },
-      { name: 'demand_to_date', type: 'date' },
-      { name: 'resource_type_id', type: 'select', source: 'resource_types', labelKey: 'type_name', valueKey: 'resource_type_id', required: true },
-      { name: 'required_count', type: 'number', step: '0.01', required: true },
-      { name: 'utilization_percentage', type: 'number', step: '0.01', required: true },
-      { name: 'notes', type: 'textarea' }
-    ]
-  }
-};
-
-const state = { data: {}, edit: null, timelineSummary: [] };
-const crudModal = new bootstrap.Modal(document.getElementById('crudModal'));
-let spendRevenueChart;
-let utilizationChart;
-let projectionChart;
-
-const idMap = {
-  resourceName: (id) => (state.data.resources || []).find((r) => String(r.resource_id) === String(id))?.name || id,
-  projectName: (id) => (state.data.projects || []).find((p) => String(p.project_id) === String(id))?.project_name || id,
-  typeName: (id) => (state.data.resource_types || []).find((t) => String(t.resource_type_id) === String(id))?.type_name || id,
-  skillName: (id) => (state.data.skills || []).find((s) => String(s.skill_id) === String(id))?.skill_name || id,
-  scenarioName: (id) => (state.data.projection_scenarios || []).find((s) => String(s.scenario_id) === String(id))?.scenario_name || id
-};
-
-const loadDashboard = async () => {
-  const data = await api('/api/dashboard');
-  const cards = [
-    ['Total Active Resources', data.total_active_resources],
-    ['Current Utilization %', data.current_utilization_percent],
-    ['Bench Count', data.bench_count],
-    ['Monthly Salary Spend', data.total_monthly_salary_spend],
-    ['Monthly Revenue Potential', data.total_monthly_revenue_potential],
-    ['Profit', data.profit]
-  ];
-  document.getElementById('dashboardCards').innerHTML = cards.map(([k, v]) => `<div class="col-md-4"><div class="card metric-card"><div class="card-body"><h6>${k}</h6><h4>${v}</h4></div></div></div>`).join('');
-
-  if (spendRevenueChart) spendRevenueChart.destroy();
-  if (utilizationChart) utilizationChart.destroy();
-  spendRevenueChart = new Chart(document.getElementById('spendRevenueChart'), { type: 'bar', data: { labels: ['Salary Spend', 'Revenue', 'Profit'], datasets: [{ label: 'Amount', data: [data.total_monthly_salary_spend, data.total_monthly_revenue_potential, data.profit] }] } });
-  utilizationChart = new Chart(document.getElementById('utilizationChart'), { type: 'doughnut', data: { labels: ['Utilized', 'Bench'], datasets: [{ data: [data.current_utilization_percent, Math.max(100 - data.current_utilization_percent, 0)] }] } });
-};
-
-const renderDemandTable = () => {
-  const selectedScenarioId = document.getElementById('demandScenarioFilter')?.value || '';
-  let rows = [...(state.data.scenario_project_demands || [])];
-  if (selectedScenarioId) rows = rows.filter((r) => String(r.scenario_id) === String(selectedScenarioId));
-  const transformed = rows.map((r) => ({
-    // keep PK for Edit/Delete button lookup
-    demand_id: r.demand_id,
-    // desired visible order
-    scenario_name: idMap.scenarioName(r.scenario_id),
-    project_name: idMap.projectName(r.project_id),
-    demand_from_date: formatDate(r.demand_from_date),
-    demand_to_date: formatDate(r.demand_to_date),
-    resource_type: idMap.typeName(r.resource_type_id),
-    required_count: r.required_count
-    // ...r,
-    // scenario_name: idMap.scenarioName(r.scenario_id),
-    // project_name: idMap.projectName(r.project_id),
-    // resource_type: idMap.typeName(r.resource_type_id)
-  }));
-  renderCrudTable('demandsTable', transformed, 'scenario_project_demands', {
-    hiddenCols: ['demand_id'] // hide PK column, keep actions working
-  });
-  // renderCrudTable('demandsTable', transformed, 'scenario_project_demands', { hiddenCols: ['scenario_id', 'project_id', 'resource_type_id'] });
-};
-
-const renderAllocationTable = () => {
-  const resourceFilter = document.getElementById('allocationResourceFilter')?.value || '';
-  const projectFilter = document.getElementById('allocationProjectFilter')?.value || '';
-  let rows = [...(state.data.allocations || [])];
-  if (resourceFilter) rows = rows.filter((r) => String(r.resource_id) === String(resourceFilter));
-  if (projectFilter) rows = rows.filter((r) => String(r.project_id) === String(projectFilter));
-  const transformed = rows.map((r) => ({
-    // ...r,
-    // resource_name: idMap.resourceName(r.resource_id),
-    // project_name: idMap.projectName(r.project_id)
-    // allocation_id: r.allocation_id, // keep PK for actions
-    project_name: idMap.projectName(r.project_id),
-    resource_name: idMap.resourceName(r.resource_id),
-    utilization_percentage: r.utilization_percentage,
-    from_date: formatDate(r.from_date),
-    to_date: formatDate(r.to_date)
-  }));
-  renderCrudTable('allocationsTable', transformed, 'allocations', { hiddenCols: ['resource_id', 'project_id'] });
-};
-
-const renderPerformanceTable = () => {
-  const fyFilter = document.getElementById('performanceFyFilter')?.value || '';
-  const userFilter = document.getElementById('performanceUserFilter')?.value || '';
-  const quarterFilter = document.getElementById('performanceQuarterFilter')?.value || '';
-
-  let rows = [...(state.data.performance_trackers || [])];
-  if (fyFilter) rows = rows.filter((r) => String(r.financial_year) === String(fyFilter));
-  if (userFilter) rows = rows.filter((r) => String(r.resource_id) === String(userFilter));
-  if (quarterFilter) rows = rows.filter((r) => String(r.quarter) === String(quarterFilter));
-
-  const transformed = rows.map((r) => ({
-    ...r,
-    resource_name: idMap.resourceName(r.resource_id),
-    project_name: idMap.projectName(r.project_id)
-  }));
-  renderCrudTable('performanceTable', transformed, 'performance_trackers', { hiddenCols: ['resource_id', 'project_id'] });
-};
-
-const renderResourceSkillsTable = () => {
-  const resourceFilter = document.getElementById('resourceSkillResourceFilter')?.value || '';
-  let rows = [...(state.data.resource_skills || [])];
-  if (resourceFilter) rows = rows.filter((r) => String(r.resource_id) === String(resourceFilter));
-  const transformed = rows.map((r) => ({
-    ...r,
-    resource_name: idMap.resourceName(r.resource_id),
-    skill_name: idMap.skillName(r.skill_id)
-  }));
-  renderCrudTable('resourceSkillsTable', transformed, 'resource_skills', { hiddenCols: ['resource_id', 'skill_id'] });
-};
-
-const populateFilterSelect = (id, list, valueKey, labelKey, placeholder) => {
-  const el = document.getElementById(id);
-  if (!el) return;
-  const current = el.value;
-  el.innerHTML = `<option value="">${placeholder}</option>${list.map((x) => `<option value="${x[valueKey]}">${x[labelKey]}</option>`).join('')}`;
-  if ([...el.options].some((o) => o.value === current)) el.value = current;
-};
-
-const refreshEntityData = async () => {
-  const entities = ['resources', 'resource_types', 'projects', 'allocations', 'skills', 'resource_skills', 'resource_comments', 'performance_trackers', 'projection_scenarios', 'scenario_project_demands'];
-  await Promise.all(entities.map(async (entity) => { state.data[entity] = await api(`/api/${entity}`); }));
-
-  state.data.resource_summary = await api('/api/resources/summary/list');
-
-  renderCrudTable('resourceTypesTable', state.data.resource_types, 'resource_types');
-  const projectRows = (state.data.projects || []).map((p) => ({
-    project_id: p.project_id, // keep PK for Edit/Delete
-    project_name: p.project_name,
-    client_name: p.client_name,
-    project_owner: p.project_owner,
-    start_date: formatDate(p.start_date),
-    end_date: formatDate(p.end_date),
-    status: p.status,
-    notes: p.notes
-  }));
-  renderCrudTable('projectsTable', projectRows, 'projects', { hiddenCols: ['project_id'] });
-
-  // renderCrudTable('projectsTable', state.data.projects, 'projects');
-  renderAllocationTable();
-  renderCrudTable('skillsTable', state.data.skills, 'skills');
-  renderResourceSkillsTable();
-  renderPerformanceTable();
-  renderCrudTable('scenariosTable', state.data.projection_scenarios, 'projection_scenarios');
-  renderDemandTable();
-
-  window._resources = state.data.resource_summary;
-  renderCrudTable('resourcesTable', state.data.resource_summary, 'resources');
-
-  const comments = (state.data.resource_comments || []).map((c) => ({ ...c, resource_name: idMap.resourceName(c.resource_id) }));
-  renderCrudTable('resourceCommentsTable', comments, 'resource_comments', { hiddenCols: ['resource_id'] });
-
-  const scenarioOptions = state.data.projection_scenarios.map((s) => `<option value="${s.scenario_id}">${s.scenario_name}</option>`).join('');
-  document.getElementById('scenarioSelect').innerHTML = scenarioOptions;
-
-  populateFilterSelect('demandScenarioFilter', state.data.projection_scenarios, 'scenario_id', 'scenario_name', 'All scenarios');
-  populateFilterSelect('allocationResourceFilter', state.data.resources, 'resource_id', 'name', 'All resources');
-  populateFilterSelect('allocationProjectFilter', state.data.projects, 'project_id', 'project_name', 'All projects');
-  populateFilterSelect('resourceSkillResourceFilter', state.data.resources, 'resource_id', 'name', 'All resources');
-  const fyValues = [...new Set((state.data.performance_trackers || []).map((r) => r.financial_year).filter(Boolean))];
-  const fyEl = document.getElementById('performanceFyFilter');
-  if (fyEl) {
-    const current = fyEl.value;
-    fyEl.innerHTML = `<option value="">All Financial Years</option>${fyValues.map((fy) => `<option value="${fy}">${fy}</option>`).join('')}`;
-    if ([...fyEl.options].some((o) => o.value === current)) fyEl.value = current;
-  }
-  populateFilterSelect('performanceUserFilter', state.data.resources, 'resource_id', 'name', 'All Users');
-};
-
-document.getElementById('resourceSearch').addEventListener('input', (e) => {
-  const q = e.target.value.toLowerCase();
-  const filtered = (window._resources || []).filter((r) => String(r.name).toLowerCase().includes(q));
-  renderCrudTable('resourcesTable', filtered, 'resources');
-});
-
-const normalizeFieldValue = (f, value) => {
-  if (value == null) return '';
-  if (f.type === 'date') return asDateInput(value);
-  if (f.type === 'month') return asMonthInput(value);
-  return value;
-};
-
-const openCrudModal = (entity, row = null) => {
-  state.edit = { entity, row };
-  const cfg = entityConfigs[entity];
-  document.getElementById('crudModalTitle').textContent = `${row ? 'Edit' : 'Add'} ${entity.replaceAll('_', ' ')}`;
-
-  const html = cfg.fields.map((f) => {
-    const value = normalizeFieldValue(f, row?.[f.name]);
-    if (f.type === 'textarea') return `<div class="mb-2"><label class="form-label">${f.name}</label><textarea class="form-control" name="${f.name}" ${f.required ? 'required' : ''}>${value}</textarea></div>`;
-    if (f.type === 'select') {
-      const options = f.options ? f.options.map((o) => (typeof o === 'object' ? o : { label: o, value: o })) : (state.data[f.source] || []).map((o) => ({ label: o[f.labelKey], value: o[f.valueKey] }));
-      return `<div class="mb-2"><label class="form-label">${f.name}</label><select class="form-select" name="${f.name}" ${f.required ? 'required' : ''}><option value="">Select</option>${options.map((o) => `<option value="${o.value}" ${String(o.value) === String(value) ? 'selected' : ''}>${o.label}</option>`).join('')}</select></div>`;
-    }
-    return `<div class="mb-2"><label class="form-label">${f.name}</label><input class="form-control" type="${f.type || 'text'}" name="${f.name}" value="${value}" ${f.placeholder ? `placeholder="${f.placeholder}"` : ''} ${f.required ? 'required' : ''} ${f.step ? `step="${f.step}"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''} ${f.max !== undefined ? `max="${f.max}"` : ''}></div>`;
-  }).join('');
-
-  document.getElementById('crudFormFields').innerHTML = html;
-  crudModal.show();
-};
-
-document.querySelectorAll('[data-add]').forEach((btn) => btn.addEventListener('click', () => openCrudModal(btn.dataset.add)));
-
-document.getElementById('crudForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const { entity, row } = state.edit;
-  const cfg = entityConfigs[entity];
-  const formData = new FormData(e.target);
-  const payload = {};
-  cfg.fields.forEach((f) => {
-    const v = formData.get(f.name);
-    payload[f.name] = v === '' ? null : v;
-  });
-
-  const pk = cfg.pk;
-  if (row && row[pk]) {
-    await api(`/api/${entity}/${row[pk]}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  } else {
-    await api(`/api/${entity}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  }
-
-  crudModal.hide();
-  e.target.reset();
-  await refreshEntityData();
-  await loadDashboard();
-  if (document.getElementById('scenarioSelect').value) await loadTimeline();
-});
-
-document.addEventListener('click', async (e) => {
-  const editBtn = e.target.closest('[data-edit]');
-  const delBtn = e.target.closest('[data-delete]');
-
-  if (editBtn) {
-    const entity = editBtn.dataset.edit;
-    const full = await api(`/api/${entity}/${editBtn.dataset.id}`);
-    openCrudModal(entity, full);
-  }
-
-  if (delBtn) {
-    const entity = delBtn.dataset.delete;
-    if (!confirm(`Delete this ${entity}?`)) return;
-    await api(`/api/${entity}/${delBtn.dataset.id}`, { method: 'DELETE' });
-    await refreshEntityData();
-    await loadDashboard();
-    if (document.getElementById('scenarioSelect').value) await loadTimeline();
-  }
-});
-
-const toChipCell = (designations, key, badgeType) => designations
-  .filter((d) => Number(d[key]) > 0)
-  .map((d) => chip(d.type_name, d[key], badgeType))
-  .join('') || '<span class="text-muted">0</span>';
-
-const toTotalPlusChipCell = (total, designations, key, badgeType) => `
-  <div>${Number(total).toFixed(2).replace(/\.00$/, '')}</div>
-  <div class="mt-1">${toChipCell(designations, key, badgeType)}</div>
-`;
-
-const loadTimeline = async () => {
-  const scenarioId = document.getElementById('scenarioSelect').value;
-  if (!scenarioId) return;
-
-  const summaryResp = await api(`/api/projection/${scenarioId}/summary`);
-  state.timelineSummary = summaryResp.summary || [];
-
-  renderTable('timelineTable', state.timelineSummary.map((m) => ({
-    month: m.month,
-    total_available: toTotalPlusChipCell(m.total_available, m.designations, 'available_count', 'secondary'),
-    total_demand: toChipCell(m.designations, 'demand_count', 'info'),
-    occupied_count: toTotalPlusChipCell(m.occupied_count, m.designations, 'occupied_count', 'primary'),
-    bench_count: toTotalPlusChipCell(m.bench_count, m.designations, 'bench_count', 'warning'),
-    shortage_count: toTotalPlusChipCell(m.shortage_count, m.designations, 'shortage_count', 'danger'),
-    salary_spend: m.salary_spend,
-    revenue_potential: m.revenue_potential,
-    profit_estimate: m.profit_estimate
-  })), { allowHtml: true });
-
-  if (projectionChart) projectionChart.destroy();
-  projectionChart = new Chart(document.getElementById('projectionChart'), {
-    type: 'line',
-    data: {
-      labels: state.timelineSummary.map((m) => m.month),
-      datasets: [
-        { label: 'Demand', data: state.timelineSummary.map((m) => m.total_demand) },
-        { label: 'Available', data: state.timelineSummary.map((m) => m.total_available) },
-        { label: 'Profit', data: state.timelineSummary.map((m) => m.profit_estimate) }
-      ]
-    }
-  });
-
-  const projectWise = await api(`/api/projection/${scenarioId}/project-wise`);
-  const flatRows = projectWise.flatMap((p) => p.timeline.map((t) => ({ project_name: p.project_name, month: t.month, required_resources: t.required_resources })));
-  renderTable('projectTimelineTable', flatRows);
-};
-
-document.getElementById('loadTimeline').addEventListener('click', loadTimeline);
-
-document.getElementById('loadBench').addEventListener('click', async () => {
-  const scenarioId = document.getElementById('scenarioSelect').value;
-  const month = document.getElementById('benchMonth').value;
-  if (!scenarioId || !month) return;
-  const resp = await api(`/api/projection/${scenarioId}/bench?month=${month}`);
-  renderTable('benchTable', resp.bench_resources);
-});
-
-document.getElementById('downloadCsv').addEventListener('click', () => {
-  const scenarioId = document.getElementById('scenarioSelect').value;
-  if (!scenarioId) return;
-  window.open(`/api/reports/scenario/${scenarioId}/csv`, '_blank');
-});
-
-document.getElementById('demandScenarioFilter').addEventListener('change', renderDemandTable);
-document.getElementById('allocationResourceFilter').addEventListener('change', renderAllocationTable);
-document.getElementById('allocationProjectFilter').addEventListener('change', renderAllocationTable);
-document.getElementById('resourceSkillResourceFilter').addEventListener('change', renderResourceSkillsTable);
-
-(async function init() {
-  await loadDashboard();
-  await refreshEntityData();
-  if (document.getElementById('scenarioSelect').value) await loadTimeline();
-})();
-
-document.getElementById('performanceFyFilter').addEventListener('change', renderPerformanceTable);
-document.getElementById('performanceUserFilter').addEventListener('change', renderPerformanceTable);
-document.getElementById('performanceQuarterFilter').addEventListener('change', renderPerformanceTable);
+const fillCalculator = () => { document.getElementById('calcProduct').innerHTML = '<option value="">Select product</option>' + state.products.map(p=>`<option value="${p.id}">${p.name} (${p.sku})</option>`).join(''); document.getElementById('calcPurchase').innerHTML = '<option value="">Select purchase</option>' + state.raw_material_purchases.map(p=>`<option value="${p.id}">#${p.id} ${p.raw_material_name} · ${p.vendor_name} · ${p.quantity} ${p.unit} · ${rs(p.purchase_price)}</option>`).join(''); if (!document.getElementById('variantRows').children.length) addVariant(); updateSnapshot(); };
+const selectedPurchase = () => byId(state.raw_material_purchases, document.getElementById('calcPurchase').value);
+const updateSnapshot = () => { const p = selectedPurchase(); document.getElementById('purchaseSnapshot').innerHTML = p ? `<b>Raw Material Snapshot</b><span>Purchase: ${p.quantity} ${p.unit}</span><span>Wastage: ${p.wastage_percent}%</span><span>Usable: ${p.usable_quantity} ${p.unit}</span><span>KG: ${p.cost_per_kg==null?'-':rs(p.cost_per_kg,4)}</span><span>Gram: ${p.cost_per_gram==null?'-':rs(p.cost_per_gram,6)}</span><span>Piece: ${p.cost_per_piece==null?'-':rs(p.cost_per_piece,4)}</span>` : ''; calcRows(); };
+const variantCalc = (r) => { const p = selectedPurchase(); if (!p) return {}; const qty = n(r.querySelector('[name=quantity]').value); const unit = r.querySelector('[name=unit]').value; const pm = byId(state.packaging_materials, r.querySelector('[name=packaging_material_id]').value) || {}; let raw = 0; if (unit === 'Piece') raw = qty * n(p.cost_per_piece); else raw = (unit === 'KG' ? qty * 1000 : qty) * n(p.cost_per_gram); const landing = raw + n(pm.current_individual_cost) + n(r.querySelector('[name=stickering_cost]').value) + n(r.querySelector('[name=labour_cost]').value); const mrp = landing * (1 + n(r.querySelector('[name=profit_percent]').value) / 100); const ctype = r.querySelector('[name=customer_discount_type]').value; const sp = ctype === 'Flat' ? mrp - n(r.querySelector('[name=customer_discount_value]').value) : mrp * (1 - n(r.querySelector('[name=customer_discount_value]').value) / 100); const dealer = mrp * (1 - n(r.querySelector('[name=dealer_discount_percent]').value) / 100); return { landing, mrp, sp, dealer }; };
+const calcRows = () => [...document.getElementById('variantRows').children].forEach(r => { const c = variantCalc(r); r.querySelector('.landing').textContent = rs(c.landing); r.querySelector('.mrp').textContent = rs(c.mrp); r.querySelector('.sp').textContent = rs(c.sp); r.querySelector('.dealer').textContent = rs(c.dealer); });
+const addVariant = () => { const tr = document.createElement('tr'); tr.innerHTML = `<td><input name="variant_name" class="form-control" placeholder="250g" required></td><td><input name="quantity" type="number" step="0.0001" min="0.0001" class="form-control" required></td><td><select name="unit" class="form-select"><option>Gram</option><option>KG</option><option>Piece</option></select></td><td><select name="packaging_material_id" class="form-select" required>${state.packaging_materials.map(p=>`<option value="${p.id}">${p.name} · ${rs(p.current_individual_cost,4)}</option>`).join('')}</select></td><td><input name="stickering_cost" type="number" step="0.0001" value="0" class="form-control"></td><td><input name="labour_cost" type="number" step="0.0001" value="0" class="form-control"></td><td><input name="profit_percent" type="number" step="0.0001" value="35" class="form-control"></td><td><select name="customer_discount_type" class="form-select"><option>Percentage</option><option>Flat</option></select></td><td><input name="customer_discount_value" type="number" step="0.0001" value="10" class="form-control"></td><td><input name="dealer_discount_percent" type="number" step="0.0001" value="20" class="form-control"></td><td class="landing fw-bold"></td><td class="mrp fw-bold"></td><td class="sp fw-bold"></td><td class="dealer fw-bold"></td><td><button type="button" class="btn btn-sm btn-outline-danger">×</button></td>`; tr.addEventListener('input', calcRows); tr.querySelector('button').addEventListener('click',()=>{tr.remove(); calcRows();}); document.getElementById('variantRows').appendChild(tr); calcRows(); };
+document.getElementById('calcPurchase').addEventListener('change', updateSnapshot); document.getElementById('addVariant').addEventListener('click', addVariant);
+document.getElementById('pricingForm').addEventListener('submit', async e => { e.preventDefault(); const form = new FormData(e.target); const variants = [...document.getElementById('variantRows').children].map(r => Object.fromEntries([...r.querySelectorAll('input,select')].map(el => [el.name, el.value]))); const resp = await api('/api/pricing_calculations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({product_id:form.get('product_id'),raw_material_purchase_id:form.get('raw_material_purchase_id'),notes:form.get('notes'),variants})}); toast('Pricing calculation saved'); await render(); window.open(`/api/pricing_calculations/${resp.id}/report`, '_blank'); });
+document.getElementById('refreshHistory').addEventListener('click', render);
+render().catch(e=>toast(e.message));

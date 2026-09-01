@@ -12,473 +12,142 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const monthRange = (startMonth, endMonth) => {
-  const months = [];
-  const [sy, sm] = startMonth.split('-').map(Number);
-  const [ey, em] = endMonth.split('-').map(Number);
-  let y = sy;
-  let m = sm;
-  while (y < ey || (y === ey && m <= em)) {
-    months.push(`${y}-${String(m).padStart(2, '0')}`);
-    m += 1;
-    if (m > 12) {
-      m = 1;
-      y += 1;
+const money = (v) => Number(v || 0);
+const round = (v, p = 4) => Number(Number(v || 0).toFixed(p));
+const isPercent4 = (v) => /^\d+(\.\d{1,4})?$/.test(String(v));
+const assert = (condition, message) => { if (!condition) { const e = new Error(message); e.status = 422; throw e; } };
+
+const units = {
+  toGram(quantity, unit) {
+    if (unit === 'KG') return money(quantity) * 1000;
+    if (unit === 'Gram') return money(quantity);
+    throw new Error('Piece cannot be converted to weight without an explicit conversion');
+  },
+  weightCompatible(unit) { return ['KG', 'Gram'].includes(unit); }
+};
+
+const calculator = {
+  rawPurchase({ quantity, unit, purchase_price, wastage_percent }) {
+    assert(money(quantity) > 0, 'Quantity must be greater than 0');
+    assert(money(purchase_price) >= 0, 'Purchase price must be greater than or equal to 0');
+    assert(money(wastage_percent) >= 0 && money(wastage_percent) < 100 && isPercent4(wastage_percent), 'Wastage must be 0 to less than 100 with up to 4 decimals');
+    const usable_quantity = round(money(quantity) * (1 - money(wastage_percent) / 100));
+    assert(usable_quantity > 0, 'Usable quantity must be greater than 0');
+    if (unit === 'Piece') return { usable_quantity, cost_per_kg: null, cost_per_gram: null, cost_per_piece: round(money(purchase_price) / usable_quantity) };
+    const usableGram = units.toGram(usable_quantity, unit);
+    const cost_per_gram = round(money(purchase_price) / usableGram, 6);
+    return { usable_quantity, cost_per_kg: round(cost_per_gram * 1000), cost_per_gram, cost_per_piece: null };
+  },
+  packagingPurchase({ quantity, purchase_cost, shipping_cost, other_cost }) {
+    assert(money(quantity) > 0, 'Packaging quantity must be greater than 0');
+    [purchase_cost, shipping_cost, other_cost].forEach((v) => assert(money(v) >= 0, 'Packaging costs must be greater than or equal to 0'));
+    const total_cost = round(money(purchase_cost) + money(shipping_cost) + money(other_cost));
+    return { total_cost, individual_piece_cost: round(total_cost / money(quantity)) };
+  },
+  variant(purchase, variant) {
+    assert(money(variant.quantity) > 0, 'Variant quantity must be greater than 0');
+    ['profit_percent', 'dealer_discount_percent'].forEach((k) => assert(money(variant[k]) >= 0 && money(variant[k]) <= 100 && isPercent4(variant[k]), `${k} must be 0-100 with up to 4 decimals`));
+    let raw_material_cost;
+    if (variant.unit === 'Piece') {
+      assert(purchase.cost_per_piece !== null && purchase.cost_per_piece !== undefined, 'Piece variants require a piece-based raw material purchase');
+      raw_material_cost = money(variant.quantity) * money(purchase.cost_per_piece);
+    } else {
+      assert(purchase.cost_per_gram !== null && purchase.cost_per_gram !== undefined, 'Weight variants require a KG/Gram raw material purchase');
+      raw_material_cost = units.toGram(variant.quantity, variant.unit) * money(purchase.cost_per_gram);
     }
+    const landing_cost = raw_material_cost + money(variant.packaging_cost) + money(variant.stickering_cost) + money(variant.labour_cost);
+    const mrp = landing_cost * (1 + money(variant.profit_percent) / 100);
+    assert(['Percentage', 'Flat'].includes(variant.customer_discount_type), 'Customer discount type is invalid');
+    assert(money(variant.customer_discount_value) >= 0, 'Customer discount cannot be negative');
+    const selling_price = variant.customer_discount_type === 'Flat'
+      ? mrp - money(variant.customer_discount_value)
+      : mrp * (1 - money(variant.customer_discount_value) / 100);
+    assert(selling_price >= 0, 'Flat discount must not be greater than MRP');
+    const dealer_price = mrp * (1 - money(variant.dealer_discount_percent) / 100);
+    return { raw_material_cost: round(raw_material_cost), landing_cost: round(landing_cost), mrp: round(mrp), selling_price: round(selling_price), dealer_price: round(dealer_price) };
   }
-  return months;
 };
 
-const getYmdParts = (value) => {
-  if (!value) return null;
-
-  if (value instanceof Date) {
-    return {
-      y: value.getFullYear(),
-      m: value.getMonth() + 1,
-      d: value.getDate()
-    };
-  }
-
-  const str = String(value);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-    const [y, m, d] = str.split('-').map(Number);
-    return { y, m, d };
-  }
-
-  const parsed = new Date(str);
-  if (!Number.isNaN(parsed.getTime())) {
-    return {
-      y: parsed.getFullYear(),
-      m: parsed.getMonth() + 1,
-      d: parsed.getDate()
-    };
-  }
-
-  return null;
+const crud = {
+  vendors: { table: 'vendors', pk: 'id' }, raw_materials: { table: 'raw_materials', pk: 'id' },
+  packaging_materials: { table: 'packaging_materials', pk: 'id' }, products: { table: 'products', pk: 'id' }
 };
 
-const monthOverlapsRange = (month, fromDate, toDate) => {
-  const mStart = new Date(`${month}-01T00:00:00Z`);
-  const mEnd = new Date(Date.UTC(mStart.getUTCFullYear(), mStart.getUTCMonth() + 1, 0, 23, 59, 59));
-  const fromParts = getYmdParts(fromDate);
-  const toParts = getYmdParts(toDate);
-  if (!fromParts || !toParts) return false;
-  const from = new Date(Date.UTC(fromParts.y, fromParts.m - 1, fromParts.d, 0, 0, 0));
-  const to = new Date(Date.UTC(toParts.y, toParts.m - 1, toParts.d, 23, 59, 59));
-  return from <= mEnd && to >= mStart;
-};
-
-const monthKeyFromDate = (value) => {
-  const parts = getYmdParts(value);
-  if (!parts) return null;
-  return `${parts.y}-${String(parts.m).padStart(2, '0')}`;
-};
-const crudConfig = {
-  resources: { table: 'resources', pk: 'resource_id' },
-  resource_types: { table: 'resource_types', pk: 'resource_type_id' },
-  projects: { table: 'projects', pk: 'project_id' },
-  allocations: { table: 'allocations', pk: 'allocation_id' },
-  skills: { table: 'skills', pk: 'skill_id' },
-  resource_skills: { table: 'resource_skills', pk: 'resource_skill_id' },
-  projection_scenarios: { table: 'projection_scenarios', pk: 'scenario_id' },
-  scenario_project_demands: { table: 'scenario_project_demands', pk: 'demand_id' },
-  resource_comments: { table: 'resource_comments', pk: 'comment_id' },
-  performance_trackers: { table: 'performance_trackers', pk: 'performance_id' }
-};
-
-for (const [route, cfg] of Object.entries(crudConfig)) {
-  app.get(`/api/${route}`, async (req, res) => {
-    try {
-      const [rows] = await pool.query(`SELECT * FROM ${cfg.table} ORDER BY ${cfg.pk} DESC`);
-      res.json(rows);
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
+for (const [route, cfg] of Object.entries(crud)) {
+  app.get(`/api/${route}`, async (_req, res) => res.json((await pool.query(`SELECT * FROM ${cfg.table} ORDER BY ${cfg.pk} DESC`))[0]));
   app.get(`/api/${route}/:id`, async (req, res) => {
-    try {
-      const [rows] = await pool.query(`SELECT * FROM ${cfg.table} WHERE ${cfg.pk} = ?`, [req.params.id]);
-      if (!rows.length) return res.status(404).json({ error: 'Not found' });
-      res.json(rows[0]);
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
+    const rows = (await pool.query(`SELECT * FROM ${cfg.table} WHERE ${cfg.pk}=?`, [req.params.id]))[0];
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
   });
-
-  app.post(`/api/${route}`, async (req, res) => {
-    try {
-      const payload = { ...req.body };
-      delete payload[cfg.pk];
-      const keys = Object.keys(payload);
-      if (!keys.length) return res.status(400).json({ error: 'No data provided' });
-      const placeholders = keys.map(() => '?').join(',');
-      const [result] = await pool.query(
-        `INSERT INTO ${cfg.table} (${keys.join(',')}) VALUES (${placeholders})`,
-        keys.map((k) => payload[k])
-      );
-      res.status(201).json({ id: result.insertId, ...payload });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.put(`/api/${route}/:id`, async (req, res) => {
-    try {
-      const payload = { ...req.body };
-      delete payload[cfg.pk];
-      const keys = Object.keys(payload);
-      if (!keys.length) return res.status(400).json({ error: 'No data provided' });
-      const setClause = keys.map((k) => `${k} = ?`).join(', ');
-      const [result] = await pool.query(
-        `UPDATE ${cfg.table} SET ${setClause} WHERE ${cfg.pk} = ?`,
-        [...keys.map((k) => payload[k]), req.params.id]
-      );
-      if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
-      res.json({ id: req.params.id, ...payload });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.delete(`/api/${route}/:id`, async (req, res) => {
-    try {
-      const [result] = await pool.query(`DELETE FROM ${cfg.table} WHERE ${cfg.pk} = ?`, [req.params.id]);
-      if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
+  app.post(`/api/${route}`, async (req, res, next) => { try {
+    const payload = { ...req.body }; delete payload[cfg.pk]; const keys = Object.keys(payload).filter((k) => payload[k] !== undefined);
+    const result = (await pool.query(`INSERT INTO ${cfg.table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => payload[k])))[0];
+    res.status(201).json({ id: result.insertId, ...payload });
+  } catch (e) { next(e); } });
+  app.put(`/api/${route}/:id`, async (req, res, next) => { try {
+    const payload = { ...req.body }; delete payload[cfg.pk]; const keys = Object.keys(payload).filter((k) => payload[k] !== undefined);
+    const result = (await pool.query(`UPDATE ${cfg.table} SET ${keys.map((k) => `${k}=?`).join(',')} WHERE ${cfg.pk}=?`, [...keys.map((k) => payload[k]), req.params.id]))[0];
+    if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
+    res.json({ id: req.params.id, ...payload });
+  } catch (e) { next(e); } });
+  app.delete(`/api/${route}/:id`, async (req, res, next) => { try {
+    const result = (await pool.query(`DELETE FROM ${cfg.table} WHERE ${cfg.pk}=?`, [req.params.id]))[0];
+    if (!result.affectedRows) return res.status(404).json({ error: 'Not found' });
+    res.json({ success: true });
+  } catch (e) { next(e); } });
 }
 
-app.get('/api/resources/summary/list', async (req, res) => {
-  try {
-    const [rows] = await pool.query(`
-      SELECT
-        r.resource_id,
-        r.name,
-        rt.type_name,
-        ROUND((TIMESTAMPDIFF(MONTH, r.date_of_joining, CURDATE())/12) + IFNULL(r.past_experience,0),2) AS total_experience,
-        r.current_ctc,
-        IFNULL(SUM(a.utilization_percentage),0) AS utilization_percent,
-        GREATEST(100 - IFNULL(SUM(a.utilization_percentage),0),0) AS bench_percent,
-        COUNT(a.allocation_id) AS active_allocations_count,
-        r.status
-      FROM resources r
-      LEFT JOIN resource_types rt ON rt.resource_type_id = r.resource_type_id
-      LEFT JOIN allocations a
-        ON a.resource_id = r.resource_id
-       AND CURDATE() BETWEEN a.from_date AND a.to_date
-      GROUP BY r.resource_id
-      ORDER BY r.name
-    `);
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+app.get('/api/dashboard', async (_req, res, next) => { try {
+  const q = async (sql) => Number(((await pool.query(sql))[0][0] || {}).total || 0);
+  const [recentPurchases] = await pool.query(`SELECT 'Raw' type, rp.id, rm.name item, v.name vendor, rp.purchase_date, rp.purchase_price total FROM raw_material_purchases rp JOIN raw_materials rm ON rm.id=rp.raw_material_id JOIN vendors v ON v.id=rp.vendor_id UNION ALL SELECT 'Packaging', pp.id, pm.name, v.name, pp.purchase_date, pp.total_cost FROM packaging_purchases pp JOIN packaging_materials pm ON pm.id=pp.packaging_material_id JOIN vendors v ON v.id=pp.vendor_id ORDER BY purchase_date DESC LIMIT 6`);
+  const [recentPricing] = await pool.query(`SELECT pc.id, p.name product, pc.calculation_date, COUNT(pv.id) variants FROM pricing_calculations pc JOIN products p ON p.id=pc.product_id LEFT JOIN product_variants pv ON pv.pricing_calculation_id=pc.id GROUP BY pc.id ORDER BY pc.id DESC LIMIT 5`);
+  res.json({ total_products: await q('SELECT COUNT(*) total FROM products'), total_raw_material_vendors: await q("SELECT COUNT(*) total FROM vendors WHERE vendor_type IN ('Raw Material','Both')"), total_packaging_materials: await q('SELECT COUNT(*) total FROM packaging_materials'), total_vendors: await q('SELECT COUNT(*) total FROM vendors'), raw_purchase_value: await q('SELECT IFNULL(SUM(purchase_price),0) total FROM raw_material_purchases'), packaging_purchase_value: await q('SELECT IFNULL(SUM(total_cost),0) total FROM packaging_purchases'), recentPurchases, recentPricing });
+} catch (e) { next(e); } });
 
-app.get('/api/dashboard', async (req, res) => {
-  try {
-    const [[active]] = await pool.query("SELECT COUNT(*) AS total FROM resources WHERE status='Active'");
-    const [[salary]] = await pool.query("SELECT IFNULL(SUM(current_ctc/12),0) AS monthly_salary FROM resources WHERE status='Active'");
-    const [[util]] = await pool.query(`
-      SELECT IFNULL(SUM(a.utilization_percentage),0) AS total_util
-      FROM allocations a
-      JOIN resources r ON r.resource_id = a.resource_id
-      WHERE r.status='Active' AND CURDATE() BETWEEN a.from_date AND a.to_date
-    `);
-    const [[bench]] = await pool.query(`
-      SELECT COUNT(*) AS bench_count FROM resources r
-      LEFT JOIN allocations a ON a.resource_id=r.resource_id AND CURDATE() BETWEEN a.from_date AND a.to_date
-      WHERE r.status='Active'
-      GROUP BY r.resource_id
-      HAVING IFNULL(SUM(a.utilization_percentage),0)=0
-    `).catch(() => [[{ bench_count: 0 }]]);
+app.post('/api/raw_material_purchases', async (req, res, next) => { try {
+  const calc = calculator.rawPurchase(req.body);
+  const p = { ...req.body, ...calc };
+  const keys = ['vendor_id','raw_material_id','purchase_date','quantity','unit','purchase_price','wastage_percent','usable_quantity','cost_per_kg','cost_per_gram','cost_per_piece','status'];
+  const result = (await pool.query(`INSERT INTO raw_material_purchases (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => p[k] ?? (k === 'status' ? 'Active' : null))))[0];
+  res.status(201).json({ id: result.insertId, ...p });
+} catch (e) { next(e); } });
+app.get('/api/raw_material_purchases', async (_req, res) => res.json((await pool.query(`SELECT rp.*, rm.name raw_material_name, v.name vendor_name FROM raw_material_purchases rp JOIN raw_materials rm ON rm.id=rp.raw_material_id JOIN vendors v ON v.id=rp.vendor_id ORDER BY rp.id DESC`))[0]));
 
-    const [revenues] = await pool.query(`
-      SELECT IFNULL(SUM((a.utilization_percentage/100) * ((rt.rate_card_min + rt.rate_card_max)/2)),0) AS monthly_revenue
-      FROM allocations a
-      JOIN resources r ON r.resource_id = a.resource_id
-      JOIN resource_types rt ON rt.resource_type_id = r.resource_type_id
-      WHERE r.status='Active' AND CURDATE() BETWEEN a.from_date AND a.to_date
-    `);
+app.post('/api/packaging_purchases', async (req, res, next) => { try {
+  const calc = calculator.packagingPurchase(req.body); const p = { ...req.body, ...calc };
+  const keys = ['packaging_material_id','vendor_id','purchase_date','quantity','unit','purchase_cost','shipping_cost','other_cost','total_cost','individual_piece_cost'];
+  const conn = await pool.getConnection();
+  try { await conn.beginTransaction(); const result = (await conn.query(`INSERT INTO packaging_purchases (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => p[k])))[0]; await conn.query('UPDATE packaging_materials SET current_individual_cost=? WHERE id=?', [calc.individual_piece_cost, p.packaging_material_id]); await conn.commit(); res.status(201).json({ id: result.insertId, ...p }); } catch (e) { await conn.rollback(); throw e; } finally { conn.release(); }
+} catch (e) { next(e); } });
+app.get('/api/packaging_purchases', async (_req, res) => res.json((await pool.query(`SELECT pp.*, pm.name packaging_material_name, v.name vendor_name FROM packaging_purchases pp JOIN packaging_materials pm ON pm.id=pp.packaging_material_id JOIN vendors v ON v.id=pp.vendor_id ORDER BY pp.id DESC`))[0]));
 
-    const monthlyRevenue = Number(revenues[0]?.monthly_revenue || 0);
-    const monthlySalary = Number(salary.monthly_salary || 0);
-
-    res.json({
-      total_active_resources: active.total,
-      current_utilization_percent: active.total ? Number((util.total_util / active.total).toFixed(2)) : 0,
-      bench_count: bench?.bench_count || 0,
-      total_monthly_salary_spend: Number(monthlySalary.toFixed(2)),
-      total_monthly_revenue_potential: Number(monthlyRevenue.toFixed(2)),
-      profit: Number((monthlyRevenue - monthlySalary).toFixed(2))
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/projection/:scenarioId/summary', async (req, res) => {
-  try {
-    const [scenarioRows] = await pool.query('SELECT * FROM projection_scenarios WHERE scenario_id=?', [req.params.scenarioId]);
-    if (!scenarioRows.length) return res.status(404).json({ error: 'Scenario not found' });
-    const scenario = scenarioRows[0];
-
-    const months = monthRange(scenario.start_month, scenario.end_month);
-
-    const [resourceTypes] = await pool.query('SELECT resource_type_id, type_name, rate_card_min, rate_card_max, salary_ctc_max FROM resource_types ORDER BY resource_type_id');
-    const [activeResourceRows] = await pool.query(`
-      SELECT resource_id, resource_type_id
-      FROM resources
-      WHERE status='Active'
-    `);
-    const [allocationRows] = await pool.query(`
-      SELECT resource_id, from_date, to_date, utilization_percentage
-      FROM allocations
-    `);
-    const [demandRows] = await pool.query(`
-      SELECT month, resource_type_id,
-             IFNULL(demand_from_date, CONCAT(month, '-01')) AS demand_from_date,
-             IFNULL(demand_to_date, LAST_DAY(CONCAT(month, '-01'))) AS demand_to_date,
-             required_count,
-             utilization_percentage
-      FROM scenario_project_demands
-      WHERE scenario_id=?
-    `, [req.params.scenarioId]);
-
-    const activeByType = {};
-    activeResourceRows.forEach((r) => {
-      activeByType[r.resource_type_id] = activeByType[r.resource_type_id] || [];
-      activeByType[r.resource_type_id].push(r.resource_id);
-    });
-
-    const allocationsByResource = {};
-    allocationRows.forEach((a) => {
-      allocationsByResource[a.resource_id] = allocationsByResource[a.resource_id] || [];
-      allocationsByResource[a.resource_id].push(a);
-    });
-
-    const demandMap = {};
-    for (const row of demandRows) {
-      const fromMonth = monthKeyFromDate(row.demand_from_date);
-      const toMonth = monthKeyFromDate(row.demand_to_date);
-      if (!fromMonth || !toMonth) continue;
-      const coveredMonths = monthRange(fromMonth, toMonth);
-      coveredMonths.forEach((month) => {
-        const key = `${month}|${row.resource_type_id}`;
-        demandMap[key] = Number((demandMap[key] || 0) + (Number(row.required_count) * (Number(row.utilization_percentage) / 100)));
-      });
+app.post('/api/pricing_calculations', async (req, res, next) => { try {
+  assert(Array.isArray(req.body.variants) && req.body.variants.length, 'At least one variant is required');
+  const [purchaseRows] = await pool.query('SELECT * FROM raw_material_purchases WHERE id=?', [req.body.raw_material_purchase_id]);
+  assert(purchaseRows.length, 'Raw material purchase is required'); const purchase = purchaseRows[0];
+  const conn = await pool.getConnection();
+  try { await conn.beginTransaction();
+    const keys = ['product_id','raw_material_purchase_id','vendor_id','raw_material_id','purchase_quantity','purchase_unit','purchase_price','wastage_percent','usable_quantity','effective_cost_per_kg','effective_cost_per_gram','effective_cost_per_piece','notes'];
+    const header = { product_id: req.body.product_id, raw_material_purchase_id: purchase.id, vendor_id: purchase.vendor_id, raw_material_id: purchase.raw_material_id, purchase_quantity: purchase.quantity, purchase_unit: purchase.unit, purchase_price: purchase.purchase_price, wastage_percent: purchase.wastage_percent, usable_quantity: purchase.usable_quantity, effective_cost_per_kg: purchase.cost_per_kg, effective_cost_per_gram: purchase.cost_per_gram, effective_cost_per_piece: purchase.cost_per_piece, notes: req.body.notes || null };
+    const result = (await conn.query(`INSERT INTO pricing_calculations (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})`, keys.map((k) => header[k])))[0];
+    for (const variant of req.body.variants) {
+      const [pmRows] = await conn.query('SELECT name,current_individual_cost FROM packaging_materials WHERE id=?', [variant.packaging_material_id]); assert(pmRows.length, 'Packaging material is required');
+      const v = { ...variant, packaging_cost: pmRows[0].current_individual_cost, packaging_material_name: pmRows[0].name };
+      Object.assign(v, calculator.variant(purchase, v));
+      const vKeys = ['pricing_calculation_id','variant_name','quantity','unit','packaging_material_id','packaging_material_name','packaging_cost','stickering_cost','labour_cost','raw_material_cost','landing_cost','profit_percent','mrp','customer_discount_type','customer_discount_value','selling_price','dealer_discount_percent','dealer_price'];
+      v.pricing_calculation_id = result.insertId;
+      await conn.query(`INSERT INTO product_variants (${vKeys.join(',')}) VALUES (${vKeys.map(() => '?').join(',')})`, vKeys.map((k) => v[k] ?? 0));
     }
+    await conn.commit(); res.status(201).json({ id: result.insertId });
+  } catch (e) { await conn.rollback(); throw e; } finally { conn.release(); }
+} catch (e) { next(e); } });
+app.get('/api/pricing_calculations', async (_req, res) => res.json((await pool.query(`SELECT pc.*, p.name product_name, rm.name raw_material_name, v.name vendor_name FROM pricing_calculations pc JOIN products p ON p.id=pc.product_id JOIN raw_materials rm ON rm.id=pc.raw_material_id JOIN vendors v ON v.id=pc.vendor_id ORDER BY pc.id DESC`))[0]));
+app.get('/api/pricing_calculations/:id', async (req, res) => { const rows = (await pool.query('SELECT * FROM pricing_calculations WHERE id=?', [req.params.id]))[0]; if (!rows.length) return res.status(404).json({ error: 'Not found' }); const variants = (await pool.query('SELECT * FROM product_variants WHERE pricing_calculation_id=?', [req.params.id]))[0]; res.json({ ...rows[0], variants }); });
+app.get('/api/pricing_calculations/:id/report', async (req, res) => { const [rows] = await pool.query(`SELECT pc.*, p.name product_name, p.sku, rm.name raw_material_name, v.name vendor_name FROM pricing_calculations pc JOIN products p ON p.id=pc.product_id JOIN raw_materials rm ON rm.id=pc.raw_material_id JOIN vendors v ON v.id=pc.vendor_id WHERE pc.id=?`, [req.params.id]); if (!rows.length) return res.status(404).send('Not found'); const [variants] = await pool.query('SELECT * FROM product_variants WHERE pricing_calculation_id=?', [req.params.id]); res.send(reportHtml(rows[0], variants)); });
 
-    const summary = months.map((month) => {
-      let totalAvailable = 0;
-      let totalDemand = 0;
-      let totalOccupied = 0;
-      let totalBench = 0;
-      let totalShortage = 0;
-      let revenue = 0;
-      let salary = 0;
+function reportHtml(c, variants) { const rs = (n, d = 2) => `₹${Number(n || 0).toFixed(d)}`; return `<!doctype html><html><head><title>Costing Report #${c.id}</title><link rel="stylesheet" href="/styles.css"></head><body class="report"><header><h1>Product Costing & Pricing Report</h1><p>Calculation #${c.id} · ${new Date(c.calculation_date).toLocaleString()}</p></header><section><h2>Product Information</h2><p><b>${c.product_name}</b> (${c.sku}) · Raw Material: ${c.raw_material_name} · Vendor: ${c.vendor_name}</p></section><section><h2>Raw Material Costing</h2><table><tbody><tr><td>Purchase Quantity</td><td>${c.purchase_quantity} ${c.purchase_unit}</td></tr><tr><td>Purchase Price</td><td>${rs(c.purchase_price)}</td></tr><tr><td>Wastage</td><td>${c.wastage_percent}%</td></tr><tr><td>Usable Quantity</td><td>${c.usable_quantity} ${c.purchase_unit}</td></tr><tr><td>Effective Cost/KG</td><td>${c.effective_cost_per_kg == null ? '-' : rs(c.effective_cost_per_kg, 4)}</td></tr><tr><td>Effective Cost/Gram</td><td>${c.effective_cost_per_gram == null ? '-' : rs(c.effective_cost_per_gram, 6)}</td></tr></tbody></table></section><section><h2>Variant Pricing</h2><table><thead><tr><th>Variant</th><th>Raw</th><th>Packaging</th><th>Sticker</th><th>Labour</th><th>Landing</th><th>Profit %</th><th>MRP</th><th>Customer SP</th><th>Dealer Price</th></tr></thead><tbody>${variants.map((v) => `<tr><td>${v.variant_name}</td><td>${rs(v.raw_material_cost)}</td><td>${rs(v.packaging_cost)}</td><td>${rs(v.stickering_cost)}</td><td>${rs(v.labour_cost)}</td><td><b>${rs(v.landing_cost)}</b></td><td>${v.profit_percent}%</td><td><b>${rs(v.mrp)}</b></td><td><b>${rs(v.selling_price)}</b></td><td><b>${rs(v.dealer_price)}</b></td></tr>`).join('')}</tbody></table></section><footer>Generated by Product Pricing & Costing Application</footer><script>window.print()</script></body></html>`; }
 
-      const designations = resourceTypes.map((rt) => {
-        const activeIds = activeByType[rt.resource_type_id] || [];
-        const typeAllocatedFte = activeIds.reduce((sum, resourceId) => {
-          const allocs = allocationsByResource[resourceId] || [];
-          const utilForMonth = allocs
-            .filter((a) => monthOverlapsRange(month, a.from_date, a.to_date))
-            .reduce((u, a) => u + (Number(a.utilization_percentage || 0) / 100), 0);
-          return sum + Math.min(utilForMonth, 1);
-        }, 0);
-        const available = Math.max(activeIds.length - typeAllocatedFte, 0);
-        const demand = Number((demandMap[`${month}|${rt.resource_type_id}`] || 0).toFixed(2));
-        const occupied = Number(typeAllocatedFte.toFixed(2));
-        const bench = Math.max(available - demand, 0);
-        const shortage = Math.max(demand - available, 0);
-        const minRate = Number(rt.rate_card_min || 0);
-        const maxSalary = Number(rt.salary_ctc_max || 0);
-        const typeRevenuePotential = (occupied + bench + shortage) * minRate;
-        const typeSalarySpend = ((occupied + bench + shortage) * maxSalary) / 12;
-        const typeServiceableRevenue = occupied * minRate;
-
-        totalAvailable += available;
-        totalDemand += demand;
-        totalOccupied += occupied;
-        totalBench += bench;
-        totalShortage += shortage;
-        revenue += typeRevenuePotential;
-        salary += typeSalarySpend;
-
-        return {
-          resource_type_id: rt.resource_type_id,
-          type_name: rt.type_name,
-          available_count: Number(available.toFixed(2)),
-          demand_count: Number(demand.toFixed(2)),
-          occupied_count: Number(occupied.toFixed(2)),
-          bench_count: Number(bench.toFixed(2)),
-          shortage_count: Number(shortage.toFixed(2)),
-          salary_spend: Number(typeSalarySpend.toFixed(2)),
-          revenue_potential: Number(typeRevenuePotential.toFixed(2)),
-          serviceable_revenue: Number(typeServiceableRevenue.toFixed(2))
-        };
-      });
-
-      return {
-        month,
-        total_available: Number(totalAvailable.toFixed(2)),
-        total_demand: Number(totalDemand.toFixed(2)),
-        occupied_count: Number(totalOccupied.toFixed(2)),
-        bench_count: Number(totalBench.toFixed(2)),
-        shortage_count: Number(totalShortage.toFixed(2)),
-        salary_spend: Number(salary.toFixed(2)),
-        revenue_potential: Number(revenue.toFixed(2)),
-        profit_estimate: Number((revenue - salary).toFixed(2)),
-        designations
-      };
-    });
-
-    res.json({ scenario, summary });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/projection/:scenarioId/project-wise', async (req, res) => {
-  try {
-    const [scenarioRows] = await pool.query('SELECT * FROM projection_scenarios WHERE scenario_id=?', [req.params.scenarioId]);
-    if (!scenarioRows.length) return res.status(404).json({ error: 'Scenario not found' });
-    const scenario = scenarioRows[0];
-    const scenarioMonths = monthRange(scenario.start_month, scenario.end_month);
-
-    const [rows] = await pool.query(`
-      SELECT p.project_id, p.project_name, spd.month,
-             IFNULL(spd.demand_from_date, CONCAT(spd.month, '-01')) AS demand_from_date,
-             IFNULL(spd.demand_to_date, LAST_DAY(CONCAT(spd.month, '-01'))) AS demand_to_date,
-             spd.required_count,
-             spd.utilization_percentage
-      FROM scenario_project_demands spd
-      JOIN projects p ON p.project_id = spd.project_id
-      WHERE spd.scenario_id=?
-      ORDER BY p.project_name
-    `, [req.params.scenarioId]);
-
-    const grouped = {};
-    rows.forEach((row) => {
-      if (!grouped[row.project_id]) {
-        grouped[row.project_id] = {
-          project_id: row.project_id,
-          project_name: row.project_name,
-          monthTotals: Object.fromEntries(scenarioMonths.map((m) => [m, 0]))
-        };
-      }
-      const fromMonth = monthKeyFromDate(row.demand_from_date);
-      const toMonth = monthKeyFromDate(row.demand_to_date);
-      if (!fromMonth || !toMonth) return;
-      const coveredMonths = monthRange(fromMonth, toMonth);
-      coveredMonths.forEach((month) => {
-        if (grouped[row.project_id].monthTotals[month] !== undefined) {
-          grouped[row.project_id].monthTotals[month] += Number(row.required_count) * (Number(row.utilization_percentage) / 100);
-        }
-      });
-    });
-
-    const response = Object.values(grouped).map((g) => ({
-      project_id: g.project_id,
-      project_name: g.project_name,
-      timeline: scenarioMonths.map((month) => ({ month, required_resources: Number(g.monthTotals[month].toFixed(2)) }))
-    }));
-
-    res.json(response);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/projection/:scenarioId/bench', async (req, res) => {
-  try {
-    const { month } = req.query;
-    if (!month) return res.status(400).json({ error: 'month query param required (YYYY-MM)' });
-
-    const [resources] = await pool.query(`
-      SELECT r.resource_id, r.name, r.resource_type_id, rt.type_name
-      FROM resources r
-      JOIN resource_types rt ON rt.resource_type_id = r.resource_type_id
-      WHERE r.status='Active'
-      ORDER BY r.resource_type_id, r.name
-    `);
-    const [allocationRows] = await pool.query(`
-      SELECT resource_id, from_date, to_date
-      FROM allocations
-    `);
-
-    const [demandRows] = await pool.query(`
-      SELECT resource_type_id,
-             IFNULL(demand_from_date, CONCAT(month, '-01')) AS demand_from_date,
-             IFNULL(demand_to_date, LAST_DAY(CONCAT(month, '-01'))) AS demand_to_date,
-             required_count,
-             utilization_percentage
-      FROM scenario_project_demands
-      WHERE scenario_id=?
-    `, [req.params.scenarioId]);
-
-    const demandByType = {};
-    demandRows.forEach((row) => {
-      if (monthOverlapsRange(month, row.demand_from_date, row.demand_to_date)) {
-        const key = row.resource_type_id;
-        demandByType[key] = (demandByType[key] || 0) + (Number(row.required_count) * (Number(row.utilization_percentage) / 100));
-      }
-    });
-
-    const busyResourceIds = new Set(
-      allocationRows
-        .filter((a) => monthOverlapsRange(month, a.from_date, a.to_date))
-        .map((a) => String(a.resource_id))
-    );
-
-    const grouped = {};
-    resources.forEach((r) => {
-      if (!grouped[r.resource_type_id]) grouped[r.resource_type_id] = [];
-      if (!busyResourceIds.has(String(r.resource_id))) {
-        grouped[r.resource_type_id].push(r);
-      }
-    });
-
-    const benchResources = [];
-    for (const [typeId, list] of Object.entries(grouped)) {
-      const needed = Math.ceil(demandByType[typeId] || 0);
-      benchResources.push(...list.slice(needed));
-    }
-
-    res.json({ month, bench_resources: benchResources });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('/api/reports/scenario/:scenarioId/csv', async (req, res) => {
-  try {
-    const response = await fetch(`http://localhost:${PORT}/api/projection/${req.params.scenarioId}/summary`);
-    const data = await response.json();
-    if (!data.summary) return res.status(400).json(data);
-
-    const headers = ['Month', 'Total Available', 'Total Demand', 'Occupied', 'Bench', 'Shortage', 'Salary Spend', 'Revenue Potential', 'Profit'];
-    const rows = data.summary.map((s) => [s.month, s.total_available, s.total_demand, s.occupied_count, s.bench_count, s.shortage_count, s.salary_spend, s.revenue_potential, s.profit_estimate]);
-    const csv = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="scenario_${req.params.scenarioId}_summary.csv"`);
-    res.send(csv);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.message }));
+app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.listen(PORT, () => console.log(`Product Pricing app running on http://localhost:${PORT}`));
