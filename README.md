@@ -1,83 +1,52 @@
-# Resource Planning + Utilization + Revenue Projection App
+# Product Pricing & Costing Application
 
-Lightweight internal admin app built using **Node.js (Express)**, **MySQL**, and **Bootstrap 5 + vanilla JS**.
+A PHP 8.2+ and MySQL application for recording vendor purchases and calculating immutable product-costing snapshots by variant. It calculates wastage-adjusted raw-material costs, packaging landed cost, product landing cost, MRP, customer selling prices, and dealer prices.
 
-## Features
+## Technology
 
-- Resource Master + comments + utilization summary
-- Resource Type Master with rate cards
-- Project Master
-- Actual Allocations
-- Skill Matrix (skills + resource skills)
-- Projection Scenarios and Project Demand Planning
-- Month-wise projection timeline summary API and UI
-- Project-wise timeline view
-- Designation-wise summary (included in summary payload)
-- Bench forecast list
-- Dashboard metrics + Chart.js visualizations
-- CSV export for scenario summary
-
-## Tech Stack
-
-- Backend: Node.js + Express
-- Database: MySQL (`mysql2`)
-- Frontend: Bootstrap 5, HTML, CSS, JavaScript, Chart.js
+- **Backend:** native PHP 8.2+ with PDO/MySQL and a centralized `PricingCalculator` service.
+- **Frontend:** responsive Bootstrap dashboard with vanilla JavaScript for immediate recalculation.
+- **Database:** MySQL 8+ schema with foreign keys and immutable calculation/variant snapshots.
+- **Report:** print-ready business report available from Pricing History; the browser print dialog can save it as PDF.
 
 ## Setup
 
-1. Install dependencies:
+1. Create the database schema:
 
-```bash
-npm install
-```
+   ```bash
+   mysql -u root -p < schema.sql
+   ```
 
-2. Create env file:
+   Optional demo masters and purchases are available with:
 
-```bash
-cp .env.example .env
-```
+   ```bash
+   mysql -u root -p < seed.sql
+   ```
 
-3. Update `.env` with your MySQL credentials.
+2. Configure database access:
 
-4. Create schema and seed data:
+   ```bash
+   cp .env.example .env
+   ```
 
-```bash
-mysql -u root -p < schema.sql
-mysql -u root -p < seed.sql
-```
+3. Run the PHP development server from the repository root:
 
-5. Start app:
+   ```bash
+   php -S localhost:8000 router.php
+   ```
 
-```bash
-npm start
-```
+4. Open `http://localhost:8000`.
 
-Open: `http://localhost:3000`
+## Core routes
 
-## Required Tables Included
+- `public/api.php?route=vendors` — Vendor master CRUD.
+- `public/api.php?route=raw_material_purchases` — Raw purchase list/create with wastage calculations.
+- `public/api.php?route=packaging_purchases` — Packaging purchase list/create with landed cost calculation.
+- `public/api.php?route=pricing_calculations` — Immutable pricing history list/create.
+- `public/api.php?route=pricing_calculations/{id}/report` — Professional print-ready costing report.
 
-- resources
-- resource_comments
-- resource_types
-- projects
-- allocations
-- skills
-- resource_skills
-- projection_scenarios
-- scenario_project_demands
+## Business rules
 
-## Key APIs
-
-- CRUD for: `/api/resources`, `/api/resource_types`, `/api/projects`, `/api/allocations`, `/api/skills`, `/api/resource_skills`, `/api/projection_scenarios`, `/api/scenario_project_demands`
-- Resource list summary: `GET /api/resources/summary/list`
-- Dashboard: `GET /api/dashboard`
-- Projection summary: `GET /api/projection/:scenarioId/summary`
-- Project timeline: `GET /api/projection/:scenarioId/project-wise`
-- Bench list: `GET /api/projection/:scenarioId/bench?month=YYYY-MM`
-- CSV export: `GET /api/reports/scenario/:scenarioId/csv`
-
-## Notes
-
-- No multi-user role management included (single admin usage).
-- Login is intentionally skipped as requested.
-- Projection module is planning-only and separate from actual allocations.
+- KG and Gram convert centrally; Piece remains independent.
+- Wastage must be at least 0 and less than 100, with up to four decimal places.
+- Product pricing stores raw-purchase values plus packaging and calculated variant values at the time it is saved, so later master-price changes cannot alter history.

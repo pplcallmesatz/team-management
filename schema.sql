@@ -1,121 +1,140 @@
-CREATE DATABASE IF NOT EXISTS resource_planning;
-USE resource_planning;
+CREATE DATABASE IF NOT EXISTS product_pricing;
+USE product_pricing;
 
-CREATE TABLE resource_types (
-  resource_type_id INT AUTO_INCREMENT PRIMARY KEY,
-  type_name VARCHAR(100) NOT NULL,
-  rate_card_min DECIMAL(12,2) NOT NULL,
-  rate_card_max DECIMAL(12,2) NOT NULL,
-  salary_ctc_min DECIMAL(12,2),
-  salary_ctc_max DECIMAL(12,2),
+CREATE TABLE vendors (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  address TEXT,
+  mobile VARCHAR(40),
+  website VARCHAR(255),
+  email VARCHAR(160),
+  vendor_type ENUM('Raw Material','Packaging Material','Both') NOT NULL DEFAULT 'Both',
+  status ENUM('Active','Inactive') NOT NULL DEFAULT 'Active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_vendor_type (vendor_type), INDEX idx_vendor_status (status)
+);
+
+CREATE TABLE raw_materials (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  unit ENUM('KG','Gram','Piece') NOT NULL DEFAULT 'KG',
+  status ENUM('Active','Inactive') NOT NULL DEFAULT 'Active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE raw_material_purchases (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  vendor_id INT NOT NULL,
+  raw_material_id INT NOT NULL,
+  purchase_date DATE NOT NULL,
+  quantity DECIMAL(14,4) NOT NULL,
+  unit ENUM('KG','Gram','Piece') NOT NULL,
+  purchase_price DECIMAL(14,4) NOT NULL DEFAULT 0,
+  wastage_percent DECIMAL(8,4) NOT NULL DEFAULT 0,
+  usable_quantity DECIMAL(14,4) NOT NULL,
+  cost_per_kg DECIMAL(14,4),
+  cost_per_gram DECIMAL(14,6),
+  cost_per_piece DECIMAL(14,4),
+  status ENUM('Active','Inactive') NOT NULL DEFAULT 'Active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (raw_material_id) REFERENCES raw_materials(id),
+  INDEX idx_raw_purchase_filters (vendor_id, raw_material_id, purchase_date)
+);
+
+CREATE TABLE packaging_materials (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  material_type VARCHAR(80) NOT NULL,
+  vendor_id INT,
   description TEXT,
+  current_individual_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  status ENUM('Active','Inactive') NOT NULL DEFAULT 'Active',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id)
+);
+
+CREATE TABLE packaging_purchases (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  packaging_material_id INT NOT NULL,
+  vendor_id INT NOT NULL,
+  purchase_date DATE NOT NULL,
+  quantity DECIMAL(14,4) NOT NULL,
+  unit VARCHAR(30) NOT NULL DEFAULT 'Piece',
+  purchase_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  shipping_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  other_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  total_cost DECIMAL(14,4) NOT NULL,
+  individual_piece_cost DECIMAL(14,4) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (packaging_material_id) REFERENCES packaging_materials(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  INDEX idx_packaging_purchase_filters (packaging_material_id, vendor_id, purchase_date)
+);
+
+CREATE TABLE products (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  sku VARCHAR(80) NOT NULL UNIQUE,
+  category VARCHAR(120),
+  description TEXT,
+  status ENUM('Active','Inactive') NOT NULL DEFAULT 'Active',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
-CREATE TABLE resources (
-  resource_id INT AUTO_INCREMENT PRIMARY KEY,
-  name VARCHAR(120) NOT NULL,
-  date_of_joining DATE NOT NULL,
-  past_experience DECIMAL(4,2) DEFAULT 0,
-  resource_type_id INT,
-  current_ctc DECIMAL(12,2) NOT NULL,
-  status ENUM('Active','Inactive') DEFAULT 'Active',
+CREATE TABLE pricing_calculations (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  product_id INT NOT NULL,
+  raw_material_purchase_id INT NOT NULL,
+  vendor_id INT NOT NULL,
+  raw_material_id INT NOT NULL,
+  calculation_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  purchase_quantity DECIMAL(14,4) NOT NULL,
+  purchase_unit VARCHAR(20) NOT NULL,
+  purchase_price DECIMAL(14,4) NOT NULL,
+  wastage_percent DECIMAL(8,4) NOT NULL,
+  usable_quantity DECIMAL(14,4) NOT NULL,
+  effective_cost_per_kg DECIMAL(14,4),
+  effective_cost_per_gram DECIMAL(14,6),
+  effective_cost_per_piece DECIMAL(14,4),
   notes TEXT,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (resource_type_id) REFERENCES resource_types(resource_type_id)
+  FOREIGN KEY (product_id) REFERENCES products(id),
+  FOREIGN KEY (raw_material_purchase_id) REFERENCES raw_material_purchases(id),
+  FOREIGN KEY (vendor_id) REFERENCES vendors(id),
+  FOREIGN KEY (raw_material_id) REFERENCES raw_materials(id),
+  INDEX idx_pricing_history (product_id, calculation_date)
 );
 
-CREATE TABLE resource_comments (
-  comment_id INT AUTO_INCREMENT PRIMARY KEY,
-  resource_id INT NOT NULL,
-  comment_text TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (resource_id) REFERENCES resources(resource_id) ON DELETE CASCADE
-);
-
-CREATE TABLE projects (
-  project_id INT AUTO_INCREMENT PRIMARY KEY,
-  project_name VARCHAR(150) NOT NULL,
-  client_name VARCHAR(150),
-  project_owner VARCHAR(120),
-  start_date DATE,
-  end_date DATE,
-  status ENUM('Ongoing','Completed','Upcoming') DEFAULT 'Upcoming',
-  notes TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
-CREATE TABLE allocations (
-  allocation_id INT AUTO_INCREMENT PRIMARY KEY,
-  resource_id INT NOT NULL,
-  project_id INT NOT NULL,
-  from_date DATE NOT NULL,
-  to_date DATE NOT NULL,
-  utilization_percentage DECIMAL(5,2) NOT NULL,
-  notes TEXT,
+CREATE TABLE product_variants (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  pricing_calculation_id INT NOT NULL,
+  variant_name VARCHAR(120) NOT NULL,
+  quantity DECIMAL(14,4) NOT NULL,
+  unit ENUM('KG','Gram','Piece') NOT NULL,
+  packaging_material_id INT NOT NULL,
+  packaging_material_name VARCHAR(160) NOT NULL,
+  packaging_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  stickering_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  labour_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  raw_material_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  landing_cost DECIMAL(14,4) NOT NULL DEFAULT 0,
+  profit_percent DECIMAL(8,4) NOT NULL DEFAULT 0,
+  mrp DECIMAL(14,4) NOT NULL DEFAULT 0,
+  customer_discount_type ENUM('Percentage','Flat') NOT NULL DEFAULT 'Percentage',
+  customer_discount_value DECIMAL(14,4) NOT NULL DEFAULT 0,
+  selling_price DECIMAL(14,4) NOT NULL DEFAULT 0,
+  dealer_discount_percent DECIMAL(8,4) NOT NULL DEFAULT 0,
+  dealer_price DECIMAL(14,4) NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (resource_id) REFERENCES resources(resource_id) ON DELETE CASCADE,
-  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-);
-
-CREATE TABLE skills (
-  skill_id INT AUTO_INCREMENT PRIMARY KEY,
-  skill_name VARCHAR(120) NOT NULL,
-  category VARCHAR(100),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE resource_skills (
-  resource_skill_id INT AUTO_INCREMENT PRIMARY KEY,
-  resource_id INT NOT NULL,
-  skill_id INT NOT NULL,
-  level TINYINT NOT NULL DEFAULT 0,
-  UNIQUE KEY uq_resource_skill (resource_id, skill_id),
-  FOREIGN KEY (resource_id) REFERENCES resources(resource_id) ON DELETE CASCADE,
-  FOREIGN KEY (skill_id) REFERENCES skills(skill_id) ON DELETE CASCADE
-);
-
-CREATE TABLE projection_scenarios (
-  scenario_id INT AUTO_INCREMENT PRIMARY KEY,
-  scenario_name VARCHAR(150) NOT NULL,
-  start_month CHAR(7) NOT NULL,
-  end_month CHAR(7) NOT NULL,
-  notes TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE scenario_project_demands (
-  demand_id INT AUTO_INCREMENT PRIMARY KEY,
-  scenario_id INT NOT NULL,
-  project_id INT NOT NULL,
-  month CHAR(7) NOT NULL,
-  demand_from_date DATE NULL,
-  demand_to_date DATE NULL,
-  resource_type_id INT NOT NULL,
-  required_count DECIMAL(8,2) NOT NULL,
-  utilization_percentage DECIMAL(5,2) NOT NULL DEFAULT 100,
-  notes TEXT,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (scenario_id) REFERENCES projection_scenarios(scenario_id) ON DELETE CASCADE,
-  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE,
-  FOREIGN KEY (resource_type_id) REFERENCES resource_types(resource_type_id) ON DELETE CASCADE
-);
-
-
-CREATE TABLE performance_trackers (
-  performance_id INT AUTO_INCREMENT PRIMARY KEY,
-  resource_id INT NOT NULL,
-  project_id INT NOT NULL,
-  project_owner_name VARCHAR(120) NOT NULL,
-  financial_year VARCHAR(9) NOT NULL,
-  quarter ENUM('Q1','Q2','Q3','Q4') NOT NULL,
-  comments TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (resource_id) REFERENCES resources(resource_id) ON DELETE CASCADE,
-  FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
+  FOREIGN KEY (pricing_calculation_id) REFERENCES pricing_calculations(id) ON DELETE CASCADE,
+  FOREIGN KEY (packaging_material_id) REFERENCES packaging_materials(id)
 );
